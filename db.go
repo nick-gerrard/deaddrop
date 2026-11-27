@@ -44,9 +44,15 @@ CREATE TABLE IF NOT EXISTS log (
 CREATE INDEX IF NOT EXISTS log_room ON log(room, id);
 `
 
-const maxPlayersPerRoom = 40
+const (
+	maxPlayersPerRoom = 40
+	maxLiveRooms      = 1000
+)
 
-var ErrRoomNotFound = errors.New("room not found")
+var (
+	ErrRoomNotFound = errors.New("room not found")
+	ErrTooManyRooms = errors.New("too many active rooms")
+)
 
 type Player struct {
 	ID       string
@@ -85,7 +91,8 @@ type Snapshot struct {
 // Store uses a single serialised writer (BEGIN IMMEDIATE) and a separate
 // reader pool so polling never blocks on game actions.
 type Store struct {
-	w, r *sql.DB
+	w, r     *sql.DB
+	maxRooms int
 }
 
 func OpenStore(path string) (*Store, error) {
@@ -104,7 +111,8 @@ func OpenStore(path string) (*Store, error) {
 		w.Close()
 		return nil, err
 	}
-	return &Store{w: w, r: r}, nil
+	r.SetMaxOpenConns(4)
+	return &Store{w: w, r: r, maxRooms: maxLiveRooms}, nil
 }
 
 func (s *Store) Close() {
@@ -125,6 +133,15 @@ func (s *Store) CreateRoom(ctx context.Context, code string, g *Game, p Player) 
 		return err
 	}
 	defer tx.Rollback()
+	if s.maxRooms > 0 {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM rooms`).Scan(&n); err != nil {
+			return err
+		}
+		if n >= s.maxRooms {
+			return ErrTooManyRooms
+		}
+	}
 	t := now()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(code, game, created_at, updated_at) VALUES (?,?,?,?)`, code, string(blob), t, t); err != nil {
 		return err
@@ -200,6 +217,12 @@ func getPlayer(ctx context.Context, tx *sql.Tx, code, id string) (*Player, error
 	return &p, err
 }
 
+func countTeamHandlers(ctx context.Context, tx *sql.Tx, code, team string) (int, error) {
+	var n int
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM players WHERE room=? AND team=? AND role='handler'`, code, team).Scan(&n)
+	return n, err
+}
+
 func setPlayerTeam(ctx context.Context, tx *sql.Tx, code, id, team, role string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE players SET team=?, role=? WHERE room=? AND id=?`, team, role, code, id)
 	return err
@@ -216,12 +239,15 @@ func clearOldLog(ctx context.Context, tx *sql.Tx, rm *Room) error {
 	return err
 }
 
-// RoomMeta returns the cheap polling info for a room.
-func (s *Store) RoomMeta(ctx context.Context, code string) (version, updatedAt int64, err error) {
-	err = s.r.QueryRowContext(ctx, `SELECT version, updated_at FROM rooms WHERE code=?`, code).Scan(&version, &updatedAt)
+// RoomMeta returns the cheap polling info for a room and whether pid is a member.
+func (s *Store) RoomMeta(ctx context.Context, code, pid string) (version, updatedAt int64, isMember bool, err error) {
+	var mem int
+	err = s.r.QueryRowContext(ctx, `SELECT version, updated_at, EXISTS(SELECT 1 FROM players WHERE room=? AND id=?) FROM rooms WHERE code=?`, code, pid, code).
+		Scan(&version, &updatedAt, &mem)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrRoomNotFound
 	}
+	isMember = pid != "" && mem != 0
 	return
 }
 

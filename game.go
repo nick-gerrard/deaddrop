@@ -122,6 +122,23 @@ func NewGame(rng *rand.Rand, words []string) *Game {
 
 func (g *Game) Over() bool { return g.Winner != "" }
 
+// InProgress reports whether a round has started (a clue has been given or
+// any card has been revealed) and has not yet ended.
+func (g *Game) InProgress() bool {
+	if g.Over() {
+		return false
+	}
+	if g.HasClue {
+		return true
+	}
+	for _, c := range g.Cards {
+		if c.Revealed {
+			return true
+		}
+	}
+	return false
+}
+
 // Remaining counts the unrevealed agents of a team.
 func (g *Game) Remaining(t Team) int {
 	n := 0
@@ -153,10 +170,16 @@ func ValidateClue(raw string, cards []Card) (string, error) {
 	if len([]rune(w)) > maxClueLen {
 		return "", fmt.Errorf("%w: clue is too long", ErrBadClue)
 	}
+	hasLetter := false
 	for _, r := range w {
-		if !unicode.IsLetter(r) && r != '-' {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		} else if r != '-' {
 			return "", fmt.Errorf("%w: use letters only", ErrBadClue)
 		}
+	}
+	if !hasLetter {
+		return "", fmt.Errorf("%w: use letters only", ErrBadClue)
 	}
 	for _, c := range cards {
 		if strings.EqualFold(c.Word, w) {

@@ -3,55 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false}'>
+<meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"includeIndicatorStyles":false}'>
 <meta name="color-scheme" content="dark">
 <title>{{if .}}{{if .Code}}Case {{.Code}} · {{end}}{{end}}Dead Drop</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={{.AssetV}}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=Inter:wght@400;500;600;700&family=Special+Elite&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css?v={{.AssetV}}">
 <script src="/static/htmx.min.js?v={{.AssetV}}" defer></script>
+<script src="/static/app.js?v={{.AssetV}}" defer></script>
 </head>
 <body>
 {{end}}
 
 {{define "foot"}}
 <div id="toast" role="status" aria-live="polite"></div>
-<script>
-(function () {
-  var toastEl = document.getElementById('toast'), timer;
-  function toast(msg) {
-    toastEl.textContent = msg;
-    toastEl.classList.add('show');
-    clearTimeout(timer);
-    timer = setTimeout(function () { toastEl.classList.remove('show'); }, 3500);
-  }
-  var b = document.body, prev = null;
-  b.addEventListener('htmx:responseError', function (e) {
-    if (((e.detail.pathInfo || {}).requestPath || '').indexOf('/state') >= 0) return;
-    toast(e.detail.xhr.responseText || 'Request failed');
-  });
-  b.addEventListener('htmx:beforeSwap', function () {
-    prev = {};
-    document.querySelectorAll('.card.revealed').forEach(function (c) { prev[c.dataset.i] = 1; });
-  });
-  b.addEventListener('htmx:afterSwap', function () {
-    if (!prev) return;
-    document.querySelectorAll('.card.revealed').forEach(function (c) {
-      if (!prev[c.dataset.i]) c.classList.add('fresh');
-    });
-    prev = null;
-    if (!document.querySelector('.overlay')) delete document.documentElement.dataset.ovx;
-  });
-  var copy = document.getElementById('copy-link');
-  if (copy) copy.addEventListener('click', function () {
-    var url = location.origin + copy.dataset.path;
-    if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(url).then(function () { toast('Invite link copied'); }, function () { prompt('Copy this link:', url); });
-    } else { prompt('Copy this link:', url); }
-  });
-})();
-</script>
 </body>
 </html>
 {{end}}

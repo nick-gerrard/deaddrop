@@ -1,4 +1,4 @@
-{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms" hx-target="#game" hx-swap="outerHTML">
+{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML">
   <section class="scoreboard" aria-label="Scores">
     {{range .Teams}}
     <div class="score t-{{.Team}}"><span class="n">{{.Remaining}}</span><span class="lbl">{{.Label}} agents left</span></div>
@@ -92,7 +92,7 @@
       <p class="fine">The full key is now revealed on the board.</p>
       <div class="actions">
         <button type="button" class="btn primary" hx-post="/r/{{.Code}}/new" hx-confirm="Deal a fresh board?">New round</button>
-        <button type="button" class="btn" onclick="document.documentElement.dataset.ovx='1'">View board</button>
+        <button type="button" class="btn" data-dismiss-overlay>View board</button>
       </div>
     </div>
   </div>

@@ -39,7 +39,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go cleanupLoop(ctx, store)
+	go cleanupLoop(ctx, store, app.createLimiter)
 
 	srv := &http.Server{
 		Addr:              addr,
@@ -61,8 +61,9 @@ func main() {
 	}
 }
 
-// cleanupLoop deletes rooms idle for longer than idleRoomTTL, once an hour.
-func cleanupLoop(ctx context.Context, store *Store) {
+// cleanupLoop deletes rooms idle for longer than idleRoomTTL and prunes stale
+// rate-limit entries, once an hour.
+func cleanupLoop(ctx context.Context, store *Store, rl *rateLimiter) {
 	t := time.NewTicker(cleanupInterval)
 	defer t.Stop()
 	for {
@@ -70,6 +71,9 @@ func cleanupLoop(ctx context.Context, store *Store) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if rl != nil {
+				rl.Prune()
+			}
 			n, err := store.DeleteIdleRooms(ctx, idleRoomTTL)
 			if err != nil {
 				log.Printf("cleanup: %v", err)

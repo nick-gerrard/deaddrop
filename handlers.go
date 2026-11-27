@@ -14,10 +14,13 @@ import (
 	"io/fs"
 	"log"
 	mrand "math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 	"unicode"
 )
 
@@ -25,17 +28,93 @@ import (
 var assets embed.FS
 
 const (
-	cookiePlayer = "dd_pid"
-	cookieNick   = "dd_nick"
-	codeAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ" // no I, L, O: easily confused
-	codeLen      = 4
-	maxNickLen   = 20
+	cookiePlayer       = "dd_pid"
+	cookieNick         = "dd_nick"
+	codeAlphabet       = "ABCDEFGHJKMNPQRSTUVWXYZ" // no I, L, O: easily confused
+	codeLen            = 4
+	maxNickLen         = 20
+	maxHandlersPerTeam = 2
+	createRateLimit    = 10
+	createRateWindow   = 10 * time.Minute
+	cspHeader          = "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; img-src 'self' data:"
 )
 
+type rateLimiter struct {
+	mu     sync.Mutex
+	hits   map[string][]time.Time
+	limit  int
+	window time.Duration
+	now    func() time.Time
+}
+
+func newRateLimiter(limit int, window time.Duration) *rateLimiter {
+	return &rateLimiter{
+		hits:   make(map[string][]time.Time),
+		limit:  limit,
+		window: window,
+		now:    time.Now,
+	}
+}
+
+func (rl *rateLimiter) Allow(key string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := rl.now()
+	cutoff := now.Add(-rl.window)
+	ts := rl.hits[key]
+	kept := ts[:0]
+	for _, t := range ts {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= rl.limit {
+		rl.hits[key] = kept
+		return false
+	}
+	rl.hits[key] = append(kept, now)
+	return true
+}
+
+func (rl *rateLimiter) Prune() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	cutoff := rl.now().Add(-rl.window)
+	for k, ts := range rl.hits {
+		kept := ts[:0]
+		for _, t := range ts {
+			if t.After(cutoff) {
+				kept = append(kept, t)
+			}
+		}
+		if len(kept) == 0 {
+			delete(rl.hits, k)
+		} else {
+			rl.hits[k] = kept
+		}
+	}
+}
+
+func clientIP(r *http.Request) string {
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if ip := strings.TrimSpace(strings.Split(xff, ",")[0]); ip != "" {
+			return ip
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 type App struct {
-	store  *Store
-	tmpl   *template.Template
-	assetV string
+	store         *Store
+	tmpl          *template.Template
+	assetV        string
+	createLimiter *rateLimiter
 }
 
 func NewApp(store *Store) (*App, error) {
@@ -44,14 +123,19 @@ func NewApp(store *Store) (*App, error) {
 		return nil, err
 	}
 	h := sha256.New()
-	for _, f := range []string{"static/style.css", "static/htmx.min.js"} {
+	for _, f := range []string{"static/style.css", "static/htmx.min.js", "static/app.js", "static/favicon.svg"} {
 		b, err := fs.ReadFile(assets, f)
 		if err != nil {
 			return nil, err
 		}
 		h.Write(b)
 	}
-	return &App{store: store, tmpl: t, assetV: hex.EncodeToString(h.Sum(nil))[:10]}, nil
+	return &App{
+		store:         store,
+		tmpl:          t,
+		assetV:        hex.EncodeToString(h.Sum(nil))[:10],
+		createLimiter: newRateLimiter(createRateLimit, createRateWindow),
+	}, nil
 }
 
 func (a *App) Routes() http.Handler {
@@ -72,7 +156,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /r/{code}/reveal", a.act(a.doReveal))
 	mux.HandleFunc("POST /r/{code}/end", a.act(a.doEnd))
 	mux.HandleFunc("POST /r/{code}/new", a.act(a.doNewRound))
-	return secureHeaders(mux)
+	return secureHeaders(csrfProtect(mux))
 }
 
 func cacheFor(h http.Handler) http.Handler {
@@ -89,6 +173,31 @@ func secureHeaders(h http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		h.ServeHTTP(w, r)
 	})
+}
+
+func csrfProtect(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && !sameOriginPOST(r) {
+			http.Error(w, "cross-site request rejected", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+func sameOriginPOST(r *http.Request) bool {
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" {
+		return sfs == "same-origin" || sfs == "none"
+	}
+	orig := r.Header.Get("Origin")
+	if orig == "" {
+		return false
+	}
+	u, err := url.Parse(orig)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
 }
 
 // ---------- errors ----------
@@ -183,13 +292,13 @@ func savedNick(r *http.Request) string {
 }
 
 func cleanNick(s string) (string, error) {
-	s = strings.Join(strings.Fields(s), " ")
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return -1
 		}
 		return r
 	}, s)
+	s = strings.Join(strings.Fields(s), " ")
 	if s == "" {
 		return "", errors.New("Enter a nickname")
 	}
@@ -244,6 +353,7 @@ func (a *App) render(w http.ResponseWriter, status int, name string, data any) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", cspHeader)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	w.Write(buf.Bytes())
@@ -264,12 +374,20 @@ func (a *App) create(w http.ResponseWriter, r *http.Request) {
 		a.homeError(w, r, http.StatusBadRequest, "", "", err.Error())
 		return
 	}
+	if !a.createLimiter.Allow(clientIP(r)) {
+		a.homeError(w, r, http.StatusTooManyRequests, nick, "", "Too many rooms created recently. Please wait a few minutes.")
+		return
+	}
 	id := ensurePlayerID(w, r)
 	for range 10 {
 		code := newCode()
 		err := a.store.CreateRoom(r.Context(), code, newGame(), Player{ID: id, Nickname: nick, Team: "none", Role: "operative"})
 		if isUniqueViolation(err) {
 			continue
+		}
+		if errors.Is(err, ErrTooManyRooms) {
+			a.homeError(w, r, http.StatusServiceUnavailable, nick, "", "Too many active rooms right now. Please try again later.")
+			return
 		}
 		if err != nil {
 			a.fail(w, r, err)
@@ -363,15 +481,15 @@ func (a *App) state(w http.ResponseWriter, r *http.Request) {
 	code := normCode(r.PathValue("code"))
 	pid := playerID(r)
 	have, _ := strconv.ParseInt(r.URL.Query().Get("v"), 10, 64)
-	ver, updated, err := a.store.RoomMeta(r.Context(), code)
+	ver, updated, isMember, err := a.store.RoomMeta(r.Context(), code, pid)
 	if err != nil {
 		a.fail(w, r, err)
 		return
 	}
-	if now()-updated > 600 { // keep rooms with watchers alive
+	if isMember && now()-updated > 600 { // keep rooms with watchers alive
 		_ = a.store.Touch(r.Context(), code)
 	}
-	if ver == have && pid != "" {
+	if ver == have && isMember {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -398,6 +516,7 @@ func (a *App) fragment(w http.ResponseWriter, r *http.Request, code, pid string)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", cspHeader)
 	w.Header().Set("Cache-Control", "no-store")
 	w.Write(buf.Bytes())
 }
@@ -450,6 +569,18 @@ func (a *App) doTeam(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 		}
 	default:
 		return badRequest("unknown team")
+	}
+	if role == "handler" && !(me.Team == team && me.Role == "handler") {
+		handlers, err := countTeamHandlers(ctx, tx, rm.Code, team)
+		if err != nil {
+			return err
+		}
+		if handlers >= maxHandlersPerTeam {
+			return &httpError{http.StatusConflict, "That team already has 2 handlers"}
+		}
+		if rm.Game.InProgress() && handlers > 0 {
+			return &httpError{http.StatusConflict, "Can't become handler mid-round"}
+		}
 	}
 	// The change itself is not a game event, but bump the version via Mutate.
 	return setPlayerTeam(ctx, tx, rm.Code, me.ID, team, role)
@@ -516,6 +647,9 @@ func (a *App) doEnd(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *ht
 }
 
 func (a *App) doNewRound(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	if me.Team == "none" {
+		return forbidden("Join a team to deal a new round")
+	}
 	rm.Game = newGame()
 	rm.Round++
 	if err := clearOldLog(ctx, tx, rm); err != nil {

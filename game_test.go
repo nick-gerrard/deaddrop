@@ -104,6 +104,8 @@ func TestValidateClue(t *testing.T) {
 		{"   ", "", true},
 		{"abc123", "", true},
 		{"don't", "", true},
+		{"-", "", true},
+		{"---", "", true},
 		{strings.Repeat("a", 40), "", true},
 	}
 	for _, tc := range tests {

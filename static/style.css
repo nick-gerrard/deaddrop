@@ -325,6 +325,10 @@ html[data-ovx] .overlay { display: none; }
   .overlay h2 { font-size: 1.9rem; }
 }
 
+@media (max-width: 640px), (pointer: coarse) {
+  .btn, .btn.small { min-height: 44px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .card.fresh, .card.fresh::after, .stamp-big, .overlay .dossier { animation: none !important; }
   button.card { transition: none; }
