@@ -1,6 +1,6 @@
 # Dead Drop
 
-Dead Drop is a browser-based team word-association spy game (Codenames-style) built with Go, htmx, and SQLite.
+Dead Drop is a browser-based team word-association spy party game built with Go, htmx, and SQLite.
 Two teams — **EMBER** and **TIDE** — compete on a 5×5 grid of code words: each team has one **Handler** who sees the colour key and gives a single-word clue plus a number (1–9), and one or more **Operatives** who guess up to `number + 1` cards per turn.
 Revealing your own agent lets you keep guessing; revealing a bystander or enemy agent ends your turn; revealing the single **BURNED** card immediately loses the round.
 First team to uncover all of its agents (9 for the starting team, 8 for the other) wins.
