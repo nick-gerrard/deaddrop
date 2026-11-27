@@ -93,7 +93,8 @@ a { color: var(--accent); }
 .btn[aria-pressed="true"] { background: var(--paper); color: var(--paper-ink); border-color: var(--paper); }
 .t-ember .btn[aria-pressed="true"] { background: var(--ember); color: #1d0b04; border-color: var(--ember); }
 .t-tide .btn[aria-pressed="true"] { background: var(--tide); color: #061918; border-color: var(--tide); }
-.htmx-request { opacity: .65; pointer-events: none; }
+/* Dim forms/buttons while their own request runs, but never the polled #game board (it caused a flash and dropped taps every poll). */
+.htmx-request:not(#game) { opacity: .65; pointer-events: none; }
 
 input, select, textarea {
   font: 500 1rem var(--mono); color: var(--paper-ink);
