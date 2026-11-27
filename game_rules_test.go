@@ -2,32 +2,10 @@ package main
 
 import (
 	"errors"
-	"math/rand/v2"
 	"strings"
 	"testing"
 	"unicode"
 )
-
-func testRNG(seed uint64) *rand.Rand { return rand.New(rand.NewPCG(seed, seed+1)) }
-
-// fixedGame builds a deterministic board: ember starts.
-// idx 0-8 ember, 9-16 tide, 17-23 bystander, 24 burned.
-func fixedGame() *Game {
-	g := &Game{Starter: Ember, Turn: Ember, Cards: make([]Card, BoardSize)}
-	for i := range g.Cards {
-		c := ColorBystander
-		switch {
-		case i < 9:
-			c = ColorEmber
-		case i < 17:
-			c = ColorTide
-		case i == 24:
-			c = ColorBurned
-		}
-		g.Cards[i] = Card{Word: "word" + string(rune('a'+i)), Color: c}
-	}
-	return g
-}
 
 func TestWordList(t *testing.T) {
 	seen := map[string]bool{}
@@ -47,6 +25,68 @@ func TestWordList(t *testing.T) {
 	}
 	if len(wordList) < 300 {
 		t.Errorf("word list too short: %d", len(wordList))
+	}
+}
+
+func TestHardWordList(t *testing.T) {
+	seen := map[string]bool{}
+	for _, w := range hardWordList {
+		if w == "" || w != strings.ToLower(w) {
+			t.Errorf("bad hard word %q", w)
+		}
+		for _, r := range w {
+			if !unicode.IsLetter(r) {
+				t.Errorf("non-letter in hard word %q", w)
+			}
+		}
+		if seen[w] {
+			t.Errorf("duplicate hard word %q", w)
+		}
+		seen[w] = true
+	}
+	if len(hardWordList) < 240 {
+		t.Errorf("hard word list too short: %d", len(hardWordList))
+	}
+}
+
+func TestWordListsNoDuplicatesOrOverlap(t *testing.T) {
+	classic := make(map[string]bool, len(wordList))
+	for _, w := range wordList {
+		if classic[w] {
+			t.Errorf("duplicate in classic wordList: %q", w)
+		}
+		classic[w] = true
+	}
+	hard := make(map[string]bool, len(hardWordList))
+	for _, w := range hardWordList {
+		if hard[w] {
+			t.Errorf("duplicate in hardWordList: %q", w)
+		}
+		if classic[w] {
+			t.Errorf("overlap between classic and hard word lists: %q", w)
+		}
+		hard[w] = true
+	}
+	mixed := wordsFor(PackMixed, "")
+	seen := make(map[string]bool, len(mixed))
+	for _, w := range mixed {
+		if seen[w] {
+			t.Errorf("duplicate in mixed pack: %q", w)
+		}
+		seen[w] = true
+	}
+	if len(mixed) != len(classic)+len(hard) {
+		t.Errorf("mixed pack len = %d, want %d", len(mixed), len(classic)+len(hard))
+	}
+	for seed := uint64(0); seed < 20; seed++ {
+		g := NewGame(testRNG(seed), mixed)
+		board := make(map[string]bool, BoardSize)
+		for _, c := range g.Cards {
+			if board[c.Word] {
+				t.Fatalf("seed %d: duplicate card %q in mixed game", seed, c.Word)
+			}
+			board[c.Word] = true
+		}
 	}
 }
 
