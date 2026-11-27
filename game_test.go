@@ -129,7 +129,7 @@ func TestSubmitClue(t *testing.T) {
 		wantErr error
 	}{
 		{"ok", Ember, "sea", 2, nil, nil},
-		{"ok zero", Ember, "sea", 0, nil, nil},
+		{"number zero", Ember, "sea", 0, nil, ErrBadClue},
 		{"wrong team", Tide, "sea", 2, nil, ErrNotYourTurn},
 		{"already clued", Ember, "sea", 2, func(g *Game) { g.HasClue = true }, ErrHasClue},
 		{"game over", Ember, "sea", 2, func(g *Game) { g.Winner = Tide }, ErrGameOver},
@@ -227,14 +227,12 @@ func TestGuessLimit(t *testing.T) {
 		number     int
 		correct    int // consecutive own-colour guesses to make
 		wantTurn   Team
-		wantUnlim  bool
 		wantGuesss int
 	}{
-		{"number 1 allows 2 guesses, still ours after 1", 1, 1, Ember, false, 1},
-		{"number 1 turn ends after 2", 1, 2, Tide, false, 0},
-		{"number 2 still ours after 2", 2, 2, Ember, false, 2},
-		{"number 2 ends after 3", 2, 3, Tide, false, 0},
-		{"zero is unlimited", 0, 8, Ember, true, 8},
+		{"number 1 allows 2 guesses, still ours after 1", 1, 1, Ember, 1},
+		{"number 1 turn ends after 2", 1, 2, Tide, 0},
+		{"number 2 still ours after 2", 2, 2, Ember, 2},
+		{"number 2 ends after 3", 2, 3, Tide, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,12 +249,32 @@ func TestGuessLimit(t *testing.T) {
 				t.Errorf("turn=%s guesses=%d, want %s/%d", g.Turn, g.Guesses, tc.wantTurn, tc.wantGuesss)
 			}
 			if tc.wantTurn == Ember {
-				left, unlim := g.GuessesLeft()
-				if unlim != tc.wantUnlim || (!unlim && left != tc.number+1-tc.correct) {
-					t.Errorf("GuessesLeft = %d,%v", left, unlim)
+				if left, unlim := g.GuessesLeft(); unlim || left != tc.number+1-tc.correct {
+					t.Errorf("GuessesLeft = %d,%v; want %d,false", left, unlim, tc.number+1-tc.correct)
 				}
 			}
 		})
+	}
+}
+
+func TestLegacyZeroClueUnlimited(t *testing.T) {
+	g := fixedGame()
+	// New clues with number 0 are rejected.
+	if err := g.SubmitClue(Ember, "sea", 0); !errors.Is(err, ErrBadClue) {
+		t.Fatalf("SubmitClue(0) = %v, want ErrBadClue", err)
+	}
+	// Stored legacy mid-turn clue with Number=0 still behaves as unlimited.
+	g.HasClue, g.Clue, g.Number = true, "SEA", 0
+	for i := range 8 {
+		if _, err := g.Reveal(Ember, i, "a"); err != nil {
+			t.Fatalf("legacy unlimited guess %d: %v", i, err)
+		}
+	}
+	if g.Turn != Ember || g.Guesses != 8 {
+		t.Fatalf("turn=%s guesses=%d, want ember/8", g.Turn, g.Guesses)
+	}
+	if _, unlim := g.GuessesLeft(); !unlim {
+		t.Errorf("GuessesLeft() unlimited = false, want true")
 	}
 }
 

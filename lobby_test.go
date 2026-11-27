@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -47,6 +46,7 @@ func TestListPublicRoomsDB(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.Mutate(ctx, "PUBB", func(tx *sql.Tx, rm *Room) error {
+		rm.Phase = PhasePlaying
 		rm.Game.Winner = Ember
 		rm.Game.EndReason = "test win"
 		return nil
@@ -146,10 +146,8 @@ func TestLobbyEndpointAndToggle(t *testing.T) {
 		t.Errorf("private room missing PRIVATE header tag")
 	}
 
-	// Put pubClient on ember, specClient as spectator.
-	snap, _ := store.Snapshot(context.Background(), pubRoom)
-	firstTeam := string(snap.Room.Game.Turn)
-	pubClient.post(pubLoc+"/team", url.Values{"team": {firstTeam}, "role": {"handler"}})
+	// Put pubClient on ember, specClient as spectator, plus enough players to start.
+	pubClient.post(pubLoc+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
 	specClient.post("/join", url.Values{"nickname": {"SpecNick"}, "code": {pubRoom}})
 
 	// GET /lobby lists only pubRoom, with team counts, join link, status, and NO nicknames.
@@ -168,17 +166,25 @@ func TestLobbyEndpointAndToggle(t *testing.T) {
 			t.Errorf("lobby leaked nickname %q", nick)
 		}
 	}
-	wantCount := fmt.Sprintf("%s 1", strings.ToUpper(firstTeam))
-	if !strings.Contains(lobbyBody, wantCount) {
-		t.Errorf("lobby missing team count %q: %s", wantCount, lobbyBody)
+	if !strings.Contains(lobbyBody, "EMBER 1") {
+		t.Errorf("lobby missing team count EMBER 1: %s", lobbyBody)
 	}
 	if !strings.Contains(lobbyBody, "Waiting for players") {
 		t.Errorf("lobby missing Waiting for players status: %s", lobbyBody)
 	}
 
-	// Give a clue -> status becomes "In progress round 1".
-	if code, _ := pubClient.post(pubLoc+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"1"}}); code != 200 {
-		t.Fatalf("clue = %d", code)
+	// Fill remaining roles and start -> status becomes "In progress round 1".
+	for _, p := range []struct{ nick, team, role string }{
+		{"Eop", "ember", "operative"},
+		{"Th", "tide", "handler"},
+		{"Top", "tide", "operative"},
+	} {
+		cl := newClient(t, h)
+		cl.post("/join", url.Values{"nickname": {p.nick}, "code": {pubRoom}})
+		cl.post(pubLoc+"/team", url.Values{"team": {p.team}, "role": {p.role}})
+	}
+	if code, body := pubClient.post(pubLoc+"/start", nil); code != 200 {
+		t.Fatalf("start = %d %q", code, body)
 	}
 	_, lobbyBody = guest.get("/lobby")
 	if !strings.Contains(lobbyBody, "In progress round 1") {

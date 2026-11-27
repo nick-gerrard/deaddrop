@@ -214,6 +214,7 @@
   b.addEventListener('htmx:beforeSwap', function () {
     var g = document.getElementById('game');
     var sp = document.getElementById('settings-panel');
+    var mi = document.getElementById('mission-info');
     var armedEl = document.querySelector('.card.armed');
     var cw = document.getElementById('clue-word');
     var cn = document.getElementById('clue-num');
@@ -230,6 +231,7 @@
       clueSelEnd: cw ? cw.selectionEnd : null,
       focusedId: ae && ae.id ? ae.id : '',
       settingsOpen: !!(sp && sp.open),
+      infoOpen: !!(mi && mi.open),
       armedIdx: armedEl ? armedEl.dataset.i : null
     };
     document.querySelectorAll('.card.revealed').forEach(function (c) { prev.revealed[c.dataset.i] = 1; });
@@ -269,10 +271,14 @@
       }
     }
 
-    // Restore settings panel open state
+    // Restore collapsible panel open state
     if (snap.settingsOpen) {
       var sp = document.getElementById('settings-panel');
       if (sp) sp.open = true;
+    }
+    if (snap.infoOpen) {
+      var mi = document.getElementById('mission-info');
+      if (mi) mi.open = true;
     }
 
     // Restore armed card if still clickable and wasn't cleared

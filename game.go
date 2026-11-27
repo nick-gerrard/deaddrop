@@ -72,7 +72,7 @@ type Game struct {
 	Starter   Team   `json:"starter"`
 	Turn      Team   `json:"turn"`
 	Clue      string `json:"clue,omitempty"`
-	Number    int    `json:"number,omitempty"` // 0 with HasClue = unlimited
+	Number    int    `json:"number,omitempty"` // 1..MaxClueNum
 	HasClue   bool   `json:"has_clue,omitempty"`
 	Guesses   int    `json:"guesses,omitempty"` // guesses made this turn
 	Winner    Team   `json:"winner,omitempty"`
@@ -151,6 +151,7 @@ func (g *Game) Remaining(t Team) int {
 }
 
 // GuessesLeft reports how many guesses the current clue allows.
+// Number==0 is kept as unlimited for legacy games stored before 1-9 became required.
 func (g *Game) GuessesLeft() (n int, unlimited bool) {
 	if g.Number == 0 {
 		return 0, true
@@ -189,7 +190,7 @@ func ValidateClue(raw string, cards []Card) (string, error) {
 	return strings.ToUpper(w), nil
 }
 
-// SubmitClue records the current team's clue. number 0 means unlimited.
+// SubmitClue records the current team's clue. number must be 1..MaxClueNum.
 func (g *Game) SubmitClue(team Team, raw string, number int) error {
 	if g.Over() {
 		return ErrGameOver
@@ -200,8 +201,8 @@ func (g *Game) SubmitClue(team Team, raw string, number int) error {
 	if g.HasClue {
 		return ErrHasClue
 	}
-	if number < 0 || number > MaxClueNum {
-		return fmt.Errorf("%w: number must be 0-%d", ErrBadClue, MaxClueNum)
+	if number < 1 || number > MaxClueNum {
+		return fmt.Errorf("%w: number must be 1-%d", ErrBadClue, MaxClueNum)
 	}
 	clue, err := ValidateClue(raw, g.Cards)
 	if err != nil {

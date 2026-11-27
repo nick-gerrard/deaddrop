@@ -1,54 +1,48 @@
-{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-round="{{.Round}}" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}" data-public="{{if .Public}}1{{else}}0{{end}}">
-  <section class="scoreboard" aria-label="Scores">
-    {{range .Teams}}
-    <div class="score t-{{.Team}}"><span class="n">{{.Remaining}}</span><span class="lbl">{{.Label}} agents left</span></div>
-    {{end}}
-    <div class="banner b-{{.Banner.Class}}" role="status"><div class="banner-main">
-      <strong>{{.Banner.Head}}</strong>{{if .Banner.ClueWord}}<span class="banner-clue"> — clue: <span class="clue">{{.Banner.ClueWord}} {{.Banner.ClueNum}}</span>, {{.Banner.Detail}}</span>{{end}}
-    </div>{{if .Deadline}}<span class="timer-pill{{if .TimerLow}} low{{end}}" data-deadline="{{.Deadline}}" data-now="{{.NowMs}}" aria-label="Turn timer">{{.TimerText}}</span>{{end}}</div>
-  </section>
-
-  <div class="layout">
-    <section class="table" aria-label="Board">
-      {{if .Banner.ClueWord}}<div class="clue-callout b-{{.Banner.Class}}" aria-label="Current clue">Clue: <span class="clue">{{.Banner.ClueWord}} {{.Banner.ClueNum}}</span> <span class="detail">{{.Banner.Detail}}</span></div>{{end}}
-      {{if .Hint}}<p class="hint">{{.Hint}}</p>{{end}}
-      <div class="board{{if .ShowKey}} keyview{{end}}">
-        {{range .Cards}}{{if .Clickable}}<div class="{{.Class}} clickable" data-i="{{.Index}}"><button type="button" class="card-face" data-select-card="{{.Index}}" aria-label="{{.Label}}"><span class="word">{{.Word}}</span></button>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}<div class="card-confirm"><button type="button" class="ca-reveal" hx-post="/r/{{$.Code}}/reveal" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">Tap again to reveal</button><button type="button" class="ca-mark{{if .MyMark}} marked{{end}}" hx-post="/r/{{$.Code}}/mark" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">{{if .MyMark}}Unmark{{else}}Mark{{end}}</button></div></div>{{else}}<div class="{{.Class}}" data-i="{{.Index}}"><span class="word">{{.Word}}</span><span class="sr">{{.Label}}</span>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}{{if .By}}<span class="by">{{.By}}</span>{{end}}</div>{{end}}
-        {{end}}
+{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-phase="{{.Phase}}" data-round="{{.Round}}" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}" data-public="{{if .Public}}1{{else}}0{{end}}">
+{{if .IsSetup}}
+  <div class="setup">
+    <section class="setup-teams" aria-label="Teams">
+      {{range .Teams}}
+      <div class="panel setup-team t-{{.Team}}{{if .Mine}} mine{{end}}">
+        <h2>{{.Label}}</h2>
+        <ul class="setup-roster">
+          {{range .Handlers}}<li><span class="agent-name">{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</span> <span class="role-badge">Handler</span></li>{{end}}
+          {{range .Operatives}}<li><span class="agent-name">{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</span></li>{{end}}
+          {{if and (not .Handlers) (not .Operatives)}}<li class="none">No agents yet</li>{{end}}
+        </ul>
+        <div class="setup-team-act">
+          {{if .Mine}}
+            {{if eq $.MeRole "handler"}}
+            <button type="button" class="btn wide" hx-post="/r/{{$.Code}}/team" hx-vals='{"team":"{{.Team}}","role":"operative"}'>Be operative</button>
+            {{else}}
+            <button type="button" class="btn wide" hx-post="/r/{{$.Code}}/team" hx-vals='{"team":"{{.Team}}","role":"handler"}'{{if .Handlers}} disabled{{end}}>Be Handler</button>
+            {{end}}
+          {{else}}
+          <button type="button" class="btn wide" hx-post="/r/{{$.Code}}/team" hx-vals='{"team":"{{.Team}}","role":"operative"}'>Join {{.Label}}</button>
+          {{end}}
+        </div>
       </div>
-
-      {{if .CanClue}}
-      <form class="clue-form" hx-post="/r/{{.Code}}/clue" autocomplete="off">
-        <div class="field grow">
-          <label for="clue-word">Clue (one word)</label>
-          <input id="clue-word" name="clue" maxlength="24" required autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
-        </div>
-        <div class="field">
-          <label for="clue-num">Number</label>
-          <select id="clue-num" name="number">
-            <option value="0">0 (unlimited)</option>
-            <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option>
-            <option value="4">4</option><option value="5">5</option><option value="6">6</option>
-            <option value="7">7</option><option value="8">8</option><option value="9">9</option>
-          </select>
-        </div>
-        <button class="btn primary" type="submit">Send clue</button>
-      </form>
       {{end}}
-      {{if .CanEnd}}<div class="actions"><button type="button" class="btn" hx-post="/r/{{.Code}}/end">End turn</button></div>{{end}}
     </section>
 
-    <aside class="side" aria-label="Operation details">
-      <section class="panel you">
-        <h2>Your role</h2>
-        <p class="role">You are <b>{{.Role}}</b>.</p>
-      </section>
+    <div class="setup-specs">
+      <span class="specs-line">Spectators: {{range $i, $s := .Specs}}{{if $i}}, {{end}}{{$s.Nickname}}{{if $s.You}} <em>(you)</em>{{end}}{{else}}none{{end}}</span>
+      {{if ne .MeTeam "none"}}<button type="button" class="btn small" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"none","role":"operative"}'>Spectate</button>{{end}}
+    </div>
 
-      <details class="panel settings" id="settings-panel">
-        <summary>Mission settings</summary>
-        <div class="settings-body">
-          {{if .CanSettings}}
-          <form class="settings-form" hx-post="/r/{{.Code}}/settings" hx-target="#game" hx-swap="outerHTML">
+    <div class="setup-start">
+      {{if ne .MeTeam "none"}}
+      <button type="button" class="btn primary wide" hx-post="/r/{{.Code}}/start"{{if not .CanStart}} disabled{{end}}>Lock in &amp; start</button>
+      {{end}}
+      {{if .StartReason}}<p class="start-reason">{{.StartReason}}</p>{{end}}
+    </div>
+
+    <section class="panel settings" id="settings-panel">
+      <h2>Mission settings</h2>
+      <div class="settings-body">
+        {{if .CanSettings}}
+        <form class="settings-form" hx-post="/r/{{.Code}}/settings" hx-target="#game" hx-swap="outerHTML">
+          <div class="s-row">
             <div class="s-field">
               <label for="set-timer">Turn timer</label>
               <select id="set-timer" name="timer">
@@ -56,72 +50,143 @@
               </select>
             </div>
             <div class="s-field">
-              <label for="set-pack">Word pack <span class="muted">(next round)</span></label>
+              <label for="set-pack">Word pack</label>
               <select id="set-pack" name="pack">
                 {{range .PackChoices}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
               </select>
             </div>
-            <div class="s-field custom-wrap{{if ne .Pack "custom"}} hidden{{end}}" id="custom-wrap">
-              <label for="set-custom">Custom words (25–400)</label>
-              <textarea id="set-custom" name="custom" rows="4" spellcheck="false" placeholder="Comma or newline separated words">{{.CustomWords}}</textarea>
-            </div>
-            <div class="s-field">
-              <input type="hidden" name="public" value="0">
-              <label class="check-row check-dark" for="set-public">
-                <input id="set-public" type="checkbox" name="public" value="1"{{if .Public}} checked{{end}}>
-                <span>List in public lobby</span>
-              </label>
-            </div>
-            <button type="submit" class="btn small primary wide">Save settings</button>
-          </form>
-          <div class="settings-reset">
-            <button type="button" class="btn small danger wide" hx-post="/r/{{.Code}}/series-reset" hx-target="#game" hx-swap="outerHTML" hx-confirm="Reset the series score to 0 – 0?">Reset series score ({{.EmberWins}} – {{.TideWins}})</button>
           </div>
-          {{else}}
-          <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b> · Lobby: <b>{{if .Public}}Public{{else}}Private{{end}}</b></p>
-          <p class="settings-note muted">Join a team to change mission settings.</p>
-          {{end}}
-        </div>
-      </details>
-
-      <section class="panel">
-        <h2>Rosters</h2>
-        {{range .Teams}}
-        <div class="roster t-{{.Team}}{{if .Mine}} mine{{end}}">
-          <h3>{{.Label}}</h3>
-          <p class="sub">Handlers</p>
-          <ul>{{range .Handlers}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</li>{{else}}<li class="none">none</li>{{end}}</ul>
-          <p class="sub">Operatives</p>
-          <ul>{{range .Operatives}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</li>{{else}}<li class="none">none</li>{{end}}</ul>
-          <div class="join-btns">
-            <button type="button" class="btn small" aria-pressed="{{if and .Mine (eq $.MeRole "operative")}}true{{else}}false{{end}}" hx-post="/r/{{$.Code}}/team" hx-vals='{"team":"{{.Team}}","role":"operative"}'>Operative</button>
-            <button type="button" class="btn small" aria-pressed="{{if and .Mine (eq $.MeRole "handler")}}true{{else}}false{{end}}" hx-post="/r/{{$.Code}}/team" hx-vals='{"team":"{{.Team}}","role":"handler"}'>Handler</button>
+          <div class="s-field custom-wrap{{if ne .Pack "custom"}} hidden{{end}}" id="custom-wrap">
+            <label for="set-custom">Custom words (25–400)</label>
+            <textarea id="set-custom" name="custom" rows="4" spellcheck="false" placeholder="Comma or newline separated words">{{.CustomWords}}</textarea>
           </div>
+          <div class="s-field">
+            <input type="hidden" name="public" value="0">
+            <label class="check-row check-dark" for="set-public">
+              <input id="set-public" type="checkbox" name="public" value="1"{{if .Public}} checked{{end}}>
+              <span>List in public lobby</span>
+            </label>
+          </div>
+          <button type="submit" class="btn primary wide">Save settings</button>
+        </form>
+        {{if or .EmberWins .TideWins}}
+        <div class="settings-reset">
+          <button type="button" class="btn small danger wide" hx-post="/r/{{.Code}}/series-reset" hx-target="#game" hx-swap="outerHTML" hx-confirm="Reset the series score to 0 – 0?">Reset series score ({{.EmberWins}} – {{.TideWins}})</button>
         </div>
         {{end}}
-        <div class="roster spectators">
-          <h3>SPECTATORS</h3>
-          <ul>{{range .Specs}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</li>{{else}}<li class="none">none</li>{{end}}</ul>
-          <div class="join-btns">
-            <button type="button" class="btn small" aria-pressed="{{if eq .MeTeam "none"}}true{{else}}false{{end}}" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"none","role":"operative"}'>Spectate</button>
-          </div>
+        {{else}}
+        <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b> · Lobby: <b>{{if .Public}}Public{{else}}Private{{end}}</b></p>
+        <p class="settings-note muted">Join a team to change mission settings.</p>
+        {{end}}
+      </div>
+    </section>
+  </div>
+{{else}}
+  <div class="play">
+    <section class="play-bar" aria-label="Status">
+      <span class="you-pill t-{{.MeTeam}}">{{.YouLine}}</span>
+      <div class="play-counts" aria-label="Remaining agents">
+        {{range .Teams}}<span class="count-pill t-{{.Team}}">{{.Label}} <b>{{.Remaining}}</b></span>{{end}}
+      </div>
+      {{if .Deadline}}<span class="timer-pill{{if .TimerLow}} low{{end}}" data-deadline="{{.Deadline}}" data-now="{{.NowMs}}" aria-label="Turn timer">{{.TimerText}}</span>{{end}}
+    </section>
+
+    <section class="table" aria-label="Board">
+      <div class="board{{if .ShowKey}} keyview{{end}}">
+        {{range .Cards}}{{if .Clickable}}<div class="{{.Class}} clickable" data-i="{{.Index}}"><button type="button" class="card-face" data-select-card="{{.Index}}" aria-label="{{.Label}}"><span class="word">{{.Word}}</span></button>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}<div class="card-confirm"><button type="button" class="ca-reveal" hx-post="/r/{{$.Code}}/reveal" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">Tap again to reveal</button><button type="button" class="ca-mark{{if .MyMark}} marked{{end}}" hx-post="/r/{{$.Code}}/mark" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">{{if .MyMark}}Unmark{{else}}Mark{{end}}</button></div></div>{{else}}<div class="{{.Class}}" data-i="{{.Index}}"><span class="word">{{.Word}}</span><span class="sr">{{.Label}}</span>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}{{if .By}}<span class="by">{{.By}}</span>{{end}}</div>{{end}}
+        {{end}}
+      </div>
+
+      <div class="turn-bar">
+        {{if .Over}}
+        <div class="turn-line b-over" role="status">
+          <strong>{{.Banner.Head}}</strong>
+          {{if ne .MeTeam "none"}}<button type="button" class="btn primary" hx-post="/r/{{.Code}}/new">Next round</button>{{end}}
         </div>
-      </section>
+        {{else if .CanClue}}
+        <form class="clue-form" hx-post="/r/{{.Code}}/clue" autocomplete="off">
+          <div class="field grow">
+            <label for="clue-word">Clue (one word)</label>
+            <input id="clue-word" name="clue" maxlength="24" required autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
+          </div>
+          <div class="field">
+            <label for="clue-num">Number</label>
+            <select id="clue-num" name="number" required>
+              <option value="" disabled selected>How many?</option>
+              <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+              <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+              <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+            </select>
+          </div>
+          <button class="btn primary" type="submit">Send clue</button>
+        </form>
+        {{else if .CanGuess}}
+        <div class="turn-line b-{{.Banner.Class}}" role="status">
+          <span class="clue-now"><span class="clue">{{.ClueWord}} · {{.ClueNum}}</span> <span class="detail">{{.GuessesText}}</span></span>
+          {{if .CanEnd}}<button type="button" class="btn" hx-post="/r/{{.Code}}/end">End turn</button>{{end}}
+        </div>
+        {{else}}
+        <div class="turn-line b-{{.Banner.Class}}" role="status">{{.WaitLine}}</div>
+        {{end}}
+      </div>
+    </section>
 
-      <section class="panel">
-        <h2>Mission log</h2>
-        <ol class="log">
-          {{range .Log}}<li class="k-{{.Kind}}">
-            {{if .Team}}<span class="tag t-{{.Team}}">{{.TeamLabel}}</span> {{end}}
-            {{if eq .Kind "clue"}}<b>{{.Nickname}}</b> clued <span class="mono">{{.Text}}</span>
-            {{else if eq .Kind "reveal"}}<b>{{.Nickname}}</b> revealed <span class="mono">{{.Text}}</span> <span class="res r-{{.Color}}">{{.ColorLabel}}</span>
-            {{else}}{{if .Nickname}}<b>{{.Nickname}}</b> {{end}}{{.Text}}{{end}}
-          </li>{{else}}<li class="none">No activity yet.</li>{{end}}
-        </ol>
-      </section>
+    <details class="panel mission-info" id="mission-info">
+      <summary>Mission info</summary>
+      <div class="info-body">
+        {{if and (eq .MeTeam "none") (not .Over)}}
+        <div class="spec-join">
+          <button type="button" class="btn small" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"ember","role":"operative"}'>Join EMBER as operative</button>
+          <button type="button" class="btn small" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"tide","role":"operative"}'>Join TIDE as operative</button>
+        </div>
+        {{end}}
 
-      <button type="button" class="btn danger wide" hx-post="/r/{{.Code}}/new" hx-confirm="Deal a fresh board? The current round will be lost for everyone in the room.">New round</button>
-    </aside>
+        <div class="info-rosters">
+          {{range .Teams}}
+          <div class="roster t-{{.Team}}{{if .Mine}} mine{{end}}">
+            <h3>{{.Label}}</h3>
+            <ul>
+              {{range .Handlers}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}} <span class="role-badge">Handler</span></li>{{end}}
+              {{range .Operatives}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</li>{{end}}
+              {{if and (not .Handlers) (not .Operatives)}}<li class="none">none</li>{{end}}
+            </ul>
+          </div>
+          {{end}}
+        </div>
+        {{if .Specs}}
+        <p class="specs-line">Spectators: {{range $i, $s := .Specs}}{{if $i}}, {{end}}{{$s.Nickname}}{{if $s.You}} <em>(you)</em>{{end}}{{end}}</p>
+        {{end}}
+
+        <div class="info-section">
+          <h3>Mission log</h3>
+          <ol class="log">
+            {{range .Log}}<li class="k-{{.Kind}}">
+              {{if .Team}}<span class="tag t-{{.Team}}">{{.TeamLabel}}</span> {{end}}
+              {{if eq .Kind "clue"}}<b>{{.Nickname}}</b> clued <span class="mono">{{.Text}}</span>
+              {{else if eq .Kind "reveal"}}<b>{{.Nickname}}</b> revealed <span class="mono">{{.Text}}</span> <span class="res r-{{.Color}}">{{.ColorLabel}}</span>
+              {{else}}{{if .Nickname}}<b>{{.Nickname}}</b> {{end}}{{.Text}}{{end}}
+            </li>{{else}}<li class="none">No activity yet.</li>{{end}}
+          </ol>
+        </div>
+
+        <div class="info-section info-settings">
+          <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b> · Lobby: <b>{{if .Public}}Public{{else}}Private{{end}}</b></p>
+          {{if .CanSettings}}
+          <button type="button" class="btn small" hx-post="/r/{{.Code}}/settings" hx-vals='{"public":"{{if .Public}}0{{else}}1{{end}}"}'>{{if .Public}}Make private{{else}}List in public lobby{{end}}</button>
+          {{end}}
+        </div>
+
+        {{if ne .MeTeam "none"}}
+        <div class="info-actions">
+          {{if .Over}}
+          <button type="button" class="btn primary wide" hx-post="/r/{{.Code}}/new">Next round</button>
+          {{else}}
+          <button type="button" class="btn danger wide" hx-post="/r/{{.Code}}/abort" hx-confirm="Abort this mission and return to setup?">Abort mission</button>
+          {{end}}
+        </div>
+        {{end}}
+      </div>
+    </details>
   </div>
 
   {{if .Over}}
@@ -151,10 +216,11 @@
       </div>
       <p class="fine">The full key is now revealed on the board.</p>
       <div class="actions">
-        <button type="button" class="btn primary" hx-post="/r/{{.Code}}/new" hx-confirm="Deal a fresh board?">New round</button>
+        {{if ne .MeTeam "none"}}<button type="button" class="btn primary" hx-post="/r/{{.Code}}/new">Next round</button>{{end}}
         <button type="button" class="btn" data-dismiss-overlay>View board</button>
       </div>
     </div>
   </div>
   {{end}}
+{{end}}
 </div>{{end}}

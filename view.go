@@ -81,11 +81,14 @@ type RoomView struct {
 	Code    string
 	Version int64
 	Round   int
+	Phase   string
+	IsSetup bool
 	AssetV  string
 	MeName  string
 	MeTeam  string
 	MeRole  string
 	Role    string // "ember handler", "spectator", ...
+	YouLine string // "You: EMBER Handler" / "You: TIDE operative" / "Spectating"
 	Game    *Game
 	Over    bool
 	Banner  Banner
@@ -95,13 +98,18 @@ type RoomView struct {
 	Log     []LogEntry
 	ShowKey bool
 
+	CanStart    bool
+	StartReason string
 	CanClue     bool
 	CanGuess    bool
 	CanEnd      bool
 	CanSettings bool
 	YourTurn    bool
 	TurnPhase   string
-	Hint        string
+	ClueWord    string
+	ClueNum     int
+	GuessesText string
+	WaitLine    string
 	Winner      TeamView
 
 	// Turn timer
@@ -223,10 +231,15 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 	if !validPack(pack) {
 		pack = PackClassic
 	}
+	phase := s.Room.Phase
+	if phase != PhasePlaying {
+		phase = PhaseSetup
+	}
 	v := &RoomView{
-		Code: s.Room.Code, Version: s.Room.Version, Round: s.Room.Round, AssetV: assetV,
+		Code: s.Room.Code, Version: s.Room.Version, Round: s.Room.Round,
+		Phase: phase, IsSetup: phase == PhaseSetup,
+		AssetV: assetV,
 		MeName: me.Nickname, MeTeam: me.Team, MeRole: me.Role,
-		Game: g, Over: g.Over(), Log: s.Log,
 		NowMs:       nowMs,
 		TimerSecs:   s.Room.TimerSecs,
 		Pack:        pack,
@@ -235,10 +248,7 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		EmberWins:   s.Room.EmberWins,
 		TideWins:    s.Room.TideWins,
 		Public:      s.Room.Public,
-	}
-	if !g.Over() && s.Room.Deadline > 0 {
-		v.Deadline = s.Room.Deadline
-		v.TimerText, v.TimerLow = formatCountdown(s.Room.Deadline - nowMs)
+		CanSettings: me.Team != "none",
 	}
 	for _, secs := range timerChoices {
 		lbl := "Off"
@@ -259,19 +269,71 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		})
 	}
 
-	v.ShowKey = me.IsHandler() || g.Over()
 	myTeam := Team(me.Team)
 	switch {
 	case me.Team == "none":
 		v.Role = "spectator"
+		v.YouLine = "Spectating"
+	case me.Role == "handler":
+		v.Role = fmt.Sprintf("%s %s", myTeam.Label(), me.Role)
+		v.YouLine = fmt.Sprintf("You: %s Handler", myTeam.Label())
 	default:
 		v.Role = fmt.Sprintf("%s %s", myTeam.Label(), me.Role)
+		v.YouLine = fmt.Sprintf("You: %s operative", myTeam.Label())
 	}
 
+	for i, t := range []Team{Ember, Tide} {
+		v.Teams[i] = TeamView{Team: t, Label: t.Label(), Mine: myTeam == t}
+	}
+	for _, p := range s.Players {
+		pv := PlayerView{Nickname: p.Nickname, You: p.ID == pid}
+		switch {
+		case p.Team == "none":
+			v.Specs = append(v.Specs, pv)
+		default:
+			tv := &v.Teams[0]
+			if p.Team == "tide" {
+				tv = &v.Teams[1]
+			}
+			if p.Role == "handler" {
+				tv.Handlers = append(tv.Handlers, pv)
+			} else {
+				tv.Operatives = append(tv.Operatives, pv)
+			}
+		}
+	}
+
+	if v.IsSetup {
+		v.TurnPhase = "setup"
+		for _, tv := range v.Teams {
+			switch {
+			case len(tv.Handlers) == 0:
+				v.StartReason = tv.Label + " needs a Handler"
+			case len(tv.Handlers) > maxHandlersPerTeam:
+				v.StartReason = tv.Label + " can only have one Handler"
+			case len(tv.Operatives) == 0:
+				v.StartReason = tv.Label + " needs an operative"
+			}
+			if v.StartReason != "" {
+				break
+			}
+		}
+		v.CanStart = me.Team != "none" && v.StartReason == ""
+		return v
+	}
+
+	v.Game = g
+	v.Over = g.Over()
+	v.Log = s.Log
+	if !g.Over() && s.Room.Deadline > 0 {
+		v.Deadline = s.Room.Deadline
+		v.TimerText, v.TimerLow = formatCountdown(s.Room.Deadline - nowMs)
+	}
+
+	v.ShowKey = me.IsHandler() || g.Over()
 	v.CanClue = !g.Over() && !g.HasClue && me.IsHandler() && myTeam == g.Turn
 	v.CanGuess = !g.Over() && g.HasClue && me.Team != "none" && !me.IsHandler() && myTeam == g.Turn
 	v.CanEnd = v.CanGuess && g.Guesses >= 1
-	v.CanSettings = me.Team != "none"
 	v.YourTurn = v.CanClue || v.CanGuess
 	switch {
 	case g.Over():
@@ -280,6 +342,14 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		v.TurnPhase = string(g.Turn) + "-guess"
 	default:
 		v.TurnPhase = string(g.Turn) + "-clue"
+	}
+
+	for i, t := range []Team{Ember, Tide} {
+		v.Teams[i].Remaining = g.Remaining(t)
+		v.Teams[i].Total = 8
+		if g.Starter == t {
+			v.Teams[i].Total = 9
+		}
 	}
 
 	marksByCard := make(map[int][]MarkView)
@@ -321,32 +391,6 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		v.Cards = append(v.Cards, cv)
 	}
 
-	for i, t := range []Team{Ember, Tide} {
-		tv := TeamView{Team: t, Label: t.Label(), Remaining: g.Remaining(t), Mine: myTeam == t}
-		tv.Total = 8
-		if g.Starter == t {
-			tv.Total = 9
-		}
-		v.Teams[i] = tv
-	}
-	for _, p := range s.Players {
-		pv := PlayerView{Nickname: p.Nickname, You: p.ID == pid}
-		switch {
-		case p.Team == "none":
-			v.Specs = append(v.Specs, pv)
-		default:
-			tv := &v.Teams[0]
-			if p.Team == "tide" {
-				tv = &v.Teams[1]
-			}
-			if p.Role == "handler" {
-				tv.Handlers = append(tv.Handlers, pv)
-			} else {
-				tv.Operatives = append(tv.Operatives, pv)
-			}
-		}
-	}
-
 	switch {
 	case g.Over():
 		v.Banner = Banner{Class: "over", Head: fmt.Sprintf("%s WINS — %s", g.Winner.Label(), g.EndReason)}
@@ -355,32 +399,20 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		} else {
 			v.Winner = v.Teams[0]
 		}
-		v.Hint = "Round over. Deal a new round to play again."
 		v.Recap = buildRecap(g, s.Log)
 	case !g.HasClue:
-		v.Banner = Banner{Class: string(g.Turn), Head: fmt.Sprintf("%s handlers are preparing a clue", g.Turn.Label())}
-		switch {
-		case v.CanClue:
-			// Clue form below the board is self-explanatory.
-		case me.IsHandler():
-			v.Hint = "Waiting for the other team to move."
-		case myTeam == g.Turn:
-			v.Hint = "Waiting for your handler's clue."
-		}
+		v.Banner = Banner{Class: string(g.Turn)}
+		v.WaitLine = fmt.Sprintf("Waiting for %s's Handler…", g.Turn.Label())
 	default:
-		left, unlimited := g.GuessesLeft()
-		detail := "unlimited guesses"
-		if !unlimited {
-			detail = plural(left, "guess left", "guesses left")
+		v.ClueWord = g.Clue
+		v.ClueNum = g.Number
+		if left, unlimited := g.GuessesLeft(); unlimited {
+			v.GuessesText = "unlimited guesses"
+		} else {
+			v.GuessesText = plural(left, "guess left", "guesses left")
 		}
-		v.Banner = Banner{Class: string(g.Turn), Head: fmt.Sprintf("%s operatives are guessing", g.Turn.Label()),
-			ClueWord: g.Clue, ClueNum: strconv.Itoa(g.Number), Detail: detail}
-		switch {
-		case v.CanGuess:
-			v.Hint = "Tap a card to reveal or mark it for your team."
-		case myTeam == g.Turn && me.IsHandler():
-			v.Hint = "Your operatives are guessing."
-		}
+		v.Banner = Banner{Class: string(g.Turn)}
+		v.WaitLine = fmt.Sprintf("%s is guessing: %s · %d", g.Turn.Label(), g.Clue, g.Number)
 	}
 	return v
 }
@@ -398,14 +430,14 @@ type LobbyView struct {
 	Rooms   []LobbyItemView
 }
 
-func lobbyStatus(round int, g *Game) string {
+func lobbyStatus(phase string, round int, g *Game) string {
+	if phase != PhasePlaying {
+		return "Waiting for players"
+	}
 	if g.Over() {
 		return fmt.Sprintf("Round %d finished", round)
 	}
-	if g.InProgress() || round > 1 {
-		return fmt.Sprintf("In progress round %d", round)
-	}
-	return "Waiting for players"
+	return fmt.Sprintf("In progress round %d", round)
 }
 
 func formatAgo(nowSec, updatedSec int64) string {
@@ -427,7 +459,7 @@ func buildLobbyView(rooms []LobbyRoom, nowSec int64) LobbyView {
 			Code:       r.Code,
 			EmberCount: r.EmberCount,
 			TideCount:  r.TideCount,
-			Status:     lobbyStatus(r.Round, r.Game),
+			Status:     lobbyStatus(r.Phase, r.Round, r.Game),
 			Ago:        formatAgo(nowSec, r.UpdatedAt),
 		}
 		v.Rooms = append(v.Rooms, item)
