@@ -249,11 +249,32 @@ func TestGuessLimit(t *testing.T) {
 				t.Errorf("turn=%s guesses=%d, want %s/%d", g.Turn, g.Guesses, tc.wantTurn, tc.wantGuesss)
 			}
 			if tc.wantTurn == Ember {
-				if left := g.GuessesLeft(); left != tc.number+1-tc.correct {
-					t.Errorf("GuessesLeft = %d, want %d", left, tc.number+1-tc.correct)
+				if left, unlim := g.GuessesLeft(); unlim || left != tc.number+1-tc.correct {
+					t.Errorf("GuessesLeft = %d,%v; want %d,false", left, unlim, tc.number+1-tc.correct)
 				}
 			}
 		})
+	}
+}
+
+func TestLegacyZeroClueUnlimited(t *testing.T) {
+	g := fixedGame()
+	// New clues with number 0 are rejected.
+	if err := g.SubmitClue(Ember, "sea", 0); !errors.Is(err, ErrBadClue) {
+		t.Fatalf("SubmitClue(0) = %v, want ErrBadClue", err)
+	}
+	// Stored legacy mid-turn clue with Number=0 still behaves as unlimited.
+	g.HasClue, g.Clue, g.Number = true, "SEA", 0
+	for i := range 8 {
+		if _, err := g.Reveal(Ember, i, "a"); err != nil {
+			t.Fatalf("legacy unlimited guess %d: %v", i, err)
+		}
+	}
+	if g.Turn != Ember || g.Guesses != 8 {
+		t.Fatalf("turn=%s guesses=%d, want ember/8", g.Turn, g.Guesses)
+	}
+	if _, unlim := g.GuessesLeft(); !unlim {
+		t.Errorf("GuessesLeft() unlimited = false, want true")
 	}
 }
 

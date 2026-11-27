@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -61,6 +62,70 @@ func TestMigrateLegacyDB(t *testing.T) {
 			t.Fatalf("OpenStore pass %d: %v", i+1, err)
 		}
 		s.Close()
+	}
+}
+
+func TestMigrateBackfillsPhaseForDealtGames(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "prephase.db")
+	db, err := sql.Open("sqlite", "file:"+p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE rooms (
+		code       TEXT PRIMARY KEY,
+		version    INTEGER NOT NULL DEFAULT 1,
+		round      INTEGER NOT NULL DEFAULT 1,
+		game       TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dealt := fixedGame()
+	dealtJSON, err := json.Marshal(dealt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyJSON, err := json.Marshal(&Game{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := now()
+	if _, err := db.Exec(`INSERT INTO rooms(code, game, created_at, updated_at) VALUES ('LIVE', ?, ?, ?), ('EMPT', ?, ?, ?)`,
+		string(dealtJSON), ts, ts, string(emptyJSON), ts, ts); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	s, err := OpenStore(p)
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer s.Close()
+
+	liveSnap, err := s.Snapshot(context.Background(), "LIVE")
+	if err != nil {
+		t.Fatalf("snapshot LIVE: %v", err)
+	}
+	if liveSnap.Room.Phase != PhasePlaying {
+		t.Fatalf("LIVE phase = %q, want %q", liveSnap.Room.Phase, PhasePlaying)
+	}
+	if len(liveSnap.Room.Game.Cards) != len(dealt.Cards) {
+		t.Fatalf("LIVE cards len = %d, want %d", len(liveSnap.Room.Game.Cards), len(dealt.Cards))
+	}
+	for i, c := range dealt.Cards {
+		if liveSnap.Room.Game.Cards[i] != c {
+			t.Fatalf("LIVE card %d = %+v, want %+v", i, liveSnap.Room.Game.Cards[i], c)
+		}
+	}
+
+	emptySnap, err := s.Snapshot(context.Background(), "EMPT")
+	if err != nil {
+		t.Fatalf("snapshot EMPT: %v", err)
+	}
+	if emptySnap.Room.Phase != PhaseSetup {
+		t.Fatalf("EMPT phase = %q, want %q", emptySnap.Room.Phase, PhaseSetup)
 	}
 }
 

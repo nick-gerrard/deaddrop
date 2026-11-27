@@ -339,12 +339,24 @@ func TestSetupPhaseAndRoleLocks(t *testing.T) {
 		t.Errorf("handler -> spectate while playing = %d, want 409", code)
 	}
 
-	// While playing: spectator -> handler is 409; spectator -> operative is 200.
+	// While playing: spectator -> handler is 409; spectator -> operative is 200 and never sees key colours.
 	if code, _ := spec.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}}); code != http.StatusConflict {
 		t.Errorf("spectator -> handler while playing = %d, want 409", code)
 	}
-	if code, _ := spec.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}}); code != 200 {
+	code, body := spec.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	if code != 200 {
 		t.Errorf("spectator -> operative while playing = %d, want 200", code)
+	}
+	_, specState := spec.get(base + "/state?v=0")
+	for _, html := range []string{body, specState} {
+		if !strings.Contains(html, `class="board"`) {
+			t.Errorf("mid-game operative view missing board")
+		}
+		for _, leak := range []string{" k-", "k-ember", "k-tide", "k-bystander", "k-burned", "keyview"} {
+			if strings.Contains(html, leak) {
+				t.Errorf("mid-game operative view leaked key marker %q", leak)
+			}
+		}
 	}
 
 	// While playing: settings (timer/pack) refused with 409, public toggle allowed.

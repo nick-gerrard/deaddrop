@@ -406,7 +406,11 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 	default:
 		v.ClueWord = g.Clue
 		v.ClueNum = g.Number
-		v.GuessesText = plural(g.GuessesLeft(), "guess left", "guesses left")
+		if left, unlimited := g.GuessesLeft(); unlimited {
+			v.GuessesText = "unlimited guesses"
+		} else {
+			v.GuessesText = plural(left, "guess left", "guesses left")
+		}
 		v.Banner = Banner{Class: string(g.Turn)}
 		v.WaitLine = fmt.Sprintf("%s is guessing: %s · %d", g.Turn.Label(), g.Clue, g.Number)
 	}

@@ -98,6 +98,43 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE rooms ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
 			return fmt.Errorf("add column %s: %w", c.name, err)
 		}
+		if c.name == "phase" {
+			if err := backfillPhase(db); err != nil {
+				return fmt.Errorf("backfill phase: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// backfillPhase sets phase='playing' for pre-migration rooms that already have
+// a dealt board so live rounds survive the upgrade; rooms without a board stay
+// in 'setup'.
+func backfillPhase(db *sql.DB) error {
+	rows, err := db.Query(`SELECT code, game FROM rooms`)
+	if err != nil {
+		return err
+	}
+	var playing []string
+	for rows.Next() {
+		var code, blob string
+		if err := rows.Scan(&code, &blob); err != nil {
+			rows.Close()
+			return err
+		}
+		var g Game
+		if err := json.Unmarshal([]byte(blob), &g); err == nil && len(g.Cards) > 0 {
+			playing = append(playing, code)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, code := range playing {
+		if _, err := db.Exec(`UPDATE rooms SET phase=? WHERE code=?`, PhasePlaying, code); err != nil {
+			return err
+		}
 	}
 	return nil
 }

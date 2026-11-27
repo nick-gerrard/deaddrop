@@ -151,8 +151,12 @@ func (g *Game) Remaining(t Team) int {
 }
 
 // GuessesLeft reports how many guesses the current clue allows.
-func (g *Game) GuessesLeft() int {
-	return g.Number + 1 - g.Guesses
+// Number==0 is kept as unlimited for legacy games stored before 1-9 became required.
+func (g *Game) GuessesLeft() (n int, unlimited bool) {
+	if g.Number == 0 {
+		return 0, true
+	}
+	return g.Number + 1 - g.Guesses, false
 }
 
 // ValidateClue normalises a clue (upper-case) and checks it against the board.
@@ -248,7 +252,7 @@ func (g *Game) Reveal(team Team, idx int, by string) (RevealResult, error) {
 		g.passTurn()
 		res.TurnEnded = true
 	default:
-		if g.GuessesLeft() <= 0 {
+		if left, unlimited := g.GuessesLeft(); !unlimited && left <= 0 {
 			g.passTurn()
 			res.TurnEnded = true
 		}
