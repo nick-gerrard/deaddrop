@@ -1,18 +1,19 @@
-{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML">
+{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}">
   <section class="scoreboard" aria-label="Scores">
     {{range .Teams}}
     <div class="score t-{{.Team}}"><span class="n">{{.Remaining}}</span><span class="lbl">{{.Label}} agents left</span></div>
     {{end}}
     <div class="banner b-{{.Banner.Class}}" role="status"><p>
       <strong>{{.Banner.Head}}</strong>{{if .Banner.ClueWord}} — clue: <span class="clue">{{.Banner.ClueWord}} {{.Banner.ClueNum}}</span>, {{.Banner.Detail}}{{end}}
-    </p></div>
+    </p>{{if .Deadline}}<span class="timer-pill{{if .TimerLow}} low{{end}}" data-deadline="{{.Deadline}}" data-now="{{.NowMs}}" aria-label="Turn timer">{{.TimerText}}</span>{{end}}</div>
   </section>
 
   <div class="layout">
     <section class="table" aria-label="Board">
+      {{if .Banner.ClueWord}}<div class="clue-callout b-{{.Banner.Class}}" aria-label="Current clue">Clue: <span class="clue">{{.Banner.ClueWord}} {{.Banner.ClueNum}}</span> <span class="detail">{{.Banner.Detail}}</span></div>{{end}}
       {{if .Hint}}<p class="hint">{{.Hint}}</p>{{end}}
       <div class="board{{if .ShowKey}} keyview{{end}}">
-        {{range .Cards}}{{if .Clickable}}<button type="button" class="{{.Class}}" data-i="{{.Index}}" aria-label="{{.Label}}" hx-post="/r/{{$.Code}}/reveal" hx-vals='{"card":"{{.Index}}"}'><span class="word">{{.Word}}</span></button>{{else}}<div class="{{.Class}}" data-i="{{.Index}}"><span class="word">{{.Word}}</span><span class="sr">{{.Label}}</span>{{if .By}}<span class="by">{{.By}}</span>{{end}}</div>{{end}}
+        {{range .Cards}}{{if .Clickable}}<div class="{{.Class}} clickable" data-i="{{.Index}}"><button type="button" class="card-face" data-select-card="{{.Index}}" aria-label="{{.Label}}"><span class="word">{{.Word}}</span></button>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}<div class="card-confirm"><button type="button" class="ca-reveal" hx-post="/r/{{$.Code}}/reveal" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">Tap again to reveal</button><button type="button" class="ca-mark{{if .MyMark}} marked{{end}}" hx-post="/r/{{$.Code}}/mark" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">{{if .MyMark}}Unmark{{else}}Mark{{end}}</button></div></div>{{else}}<div class="{{.Class}}" data-i="{{.Index}}"><span class="word">{{.Word}}</span><span class="sr">{{.Label}}</span>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}{{if .By}}<span class="by">{{.By}}</span>{{end}}</div>{{end}}
         {{end}}
       </div>
 
@@ -20,7 +21,7 @@
       <form class="clue-form" hx-post="/r/{{.Code}}/clue" autocomplete="off">
         <div class="field grow">
           <label for="clue-word">Clue (one word)</label>
-          <input id="clue-word" name="clue" hx-preserve maxlength="24" required autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
+          <input id="clue-word" name="clue" hx-preserve maxlength="24" required autofocus autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
         </div>
         <div class="field">
           <label for="clue-num">Number</label>
@@ -42,6 +43,39 @@
         <h2>Your role</h2>
         <p class="role">You are <b>{{.Role}}</b>.</p>
       </section>
+
+      <details class="panel settings" id="settings-panel">
+        <summary>Mission settings</summary>
+        <div class="settings-body">
+          {{if .CanSettings}}
+          <form class="settings-form" hx-post="/r/{{.Code}}/settings" hx-target="#game" hx-swap="outerHTML">
+            <div class="s-field">
+              <label for="set-timer">Turn timer</label>
+              <select id="set-timer" name="timer">
+                {{range .TimerChoices}}<option value="{{.Secs}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+              </select>
+            </div>
+            <div class="s-field">
+              <label for="set-pack">Word pack <span class="muted">(next round)</span></label>
+              <select id="set-pack" name="pack">
+                {{range .PackChoices}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+              </select>
+            </div>
+            <div class="s-field custom-wrap{{if ne .Pack "custom"}} hidden{{end}}" id="custom-wrap">
+              <label for="set-custom">Custom words (25–400)</label>
+              <textarea id="set-custom" name="custom" rows="4" spellcheck="false" placeholder="Comma or newline separated words">{{.CustomWords}}</textarea>
+            </div>
+            <button type="submit" class="btn small primary wide">Save settings</button>
+          </form>
+          <div class="settings-reset">
+            <button type="button" class="btn small danger wide" hx-post="/r/{{.Code}}/series-reset" hx-target="#game" hx-swap="outerHTML" hx-confirm="Reset the series score to 0 – 0?">Reset series score ({{.EmberWins}} – {{.TideWins}})</button>
+          </div>
+          {{else}}
+          <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b></p>
+          <p class="settings-note muted">Join a team to change mission settings.</p>
+          {{end}}
+        </div>
+      </details>
 
       <section class="panel">
         <h2>Rosters</h2>
@@ -89,6 +123,25 @@
       <p class="stamp-big">CASE CLOSED</p>
       <h2 id="win-title">{{.Winner.Label}} WINS</h2>
       <p class="reason">{{.Game.EndReason}}</p>
+      <div class="recap">
+        {{range .Recap}}
+        <div class="recap-team t-{{.Team}}">
+          <h3>{{.Label}}</h3>
+          {{if .Turns}}
+          <ul class="recap-list">
+            {{range .Turns}}
+            <li><span class="rc-clue">{{.Clue}}</span>{{if .Guesses}} → {{range .Guesses}}<span class="rc-word rc-{{.Color}}">{{.Word}}</span> {{end}}{{else}} <span class="rc-none">no guesses</span>{{end}}</li>
+            {{end}}
+          </ul>
+          {{else}}
+          <p class="rc-none">No clues given.</p>
+          {{end}}
+          {{if .Unrevealed}}
+          <p class="rc-unrev"><b>Unrevealed:</b> {{range $i, $w := .Unrevealed}}{{if $i}}, {{end}}<span class="rc-u">{{$w}}</span>{{end}}</p>
+          {{end}}
+        </div>
+        {{end}}
+      </div>
       <p class="fine">The full key is now revealed on the board.</p>
       <div class="actions">
         <button type="button" class="btn primary" hx-post="/r/{{.Code}}/new" hx-confirm="Deal a fresh board?">New round</button>

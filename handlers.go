@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,7 +116,11 @@ type App struct {
 	tmpl          *template.Template
 	assetV        string
 	createLimiter *rateLimiter
+	now           func() time.Time
+	timerScale    float64
 }
+
+func (a *App) nowMs() int64 { return a.now().UnixMilli() }
 
 func NewApp(store *Store) (*App, error) {
 	t, err := template.ParseFS(assets, "templates/*.html")
@@ -130,11 +135,19 @@ func NewApp(store *Store) (*App, error) {
 		}
 		h.Write(b)
 	}
+	scale := 1.0
+	if raw := os.Getenv("DEADDROP_TIMER_SCALE"); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
+			scale = v
+		}
+	}
 	return &App{
 		store:         store,
 		tmpl:          t,
 		assetV:        hex.EncodeToString(h.Sum(nil))[:10],
 		createLimiter: newRateLimiter(createRateLimit, createRateWindow),
+		now:           time.Now,
+		timerScale:    scale,
 	}, nil
 }
 
@@ -156,6 +169,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /r/{code}/reveal", a.act(a.doReveal))
 	mux.HandleFunc("POST /r/{code}/end", a.act(a.doEnd))
 	mux.HandleFunc("POST /r/{code}/new", a.act(a.doNewRound))
+	mux.HandleFunc("POST /r/{code}/settings", a.actWithLimit(maxSettingsBody, a.doSettings))
+	mux.HandleFunc("POST /r/{code}/series-reset", a.act(a.doSeriesReset))
+	mux.HandleFunc("POST /r/{code}/mark", a.act(a.doMark))
 	return secureHeaders(csrfProtect(mux))
 }
 
@@ -460,6 +476,7 @@ func (a *App) join(w http.ResponseWriter, r *http.Request, code, nick string, sh
 
 func (a *App) room(w http.ResponseWriter, r *http.Request) {
 	code := normCode(r.PathValue("code"))
+	a.expireTurn(r.Context(), code)
 	snap, err := a.store.Snapshot(r.Context(), code)
 	if errors.Is(err, ErrRoomNotFound) {
 		a.homeError(w, r, http.StatusNotFound, savedNick(r), "", "No room with that code")
@@ -469,7 +486,7 @@ func (a *App) room(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	v := buildView(snap, playerID(r), a.assetV)
+	v := buildView(snap, playerID(r), a.assetV, a.nowMs())
 	if v == nil {
 		a.render(w, http.StatusOK, "join.html", pageData{AssetV: a.assetV, Code: code, Nick: savedNick(r)})
 		return
@@ -479,6 +496,7 @@ func (a *App) room(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) state(w http.ResponseWriter, r *http.Request) {
 	code := normCode(r.PathValue("code"))
+	a.expireTurn(r.Context(), code)
 	pid := playerID(r)
 	have, _ := strconv.ParseInt(r.URL.Query().Get("v"), 10, 64)
 	ver, updated, isMember, err := a.store.RoomMeta(r.Context(), code, pid)
@@ -503,7 +521,7 @@ func (a *App) fragment(w http.ResponseWriter, r *http.Request, code, pid string)
 		a.fail(w, r, err)
 		return
 	}
-	v := buildView(snap, pid, a.assetV)
+	v := buildView(snap, pid, a.assetV, a.nowMs())
 	if v == nil { // not (or no longer) a member
 		w.Header().Set("HX-Redirect", "/r/"+code)
 		w.WriteHeader(http.StatusForbidden)
@@ -528,6 +546,10 @@ type actionFunc func(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 // act wraps an action: authenticates the player, runs fn in a write
 // transaction (rules enforced here, server-side) and returns the new fragment.
 func (a *App) act(fn actionFunc) http.HandlerFunc {
+	return a.actWithLimit(4096, fn)
+}
+
+func (a *App) actWithLimit(maxBody int64, fn actionFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		code := normCode(r.PathValue("code"))
 		pid := playerID(r)
@@ -535,11 +557,12 @@ func (a *App) act(fn actionFunc) http.HandlerFunc {
 			a.fail(w, r, forbidden("Join the room first"))
 			return
 		}
-		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 		if err := r.ParseForm(); err != nil {
 			a.fail(w, r, badRequest("bad form"))
 			return
 		}
+		a.expireTurn(r.Context(), code)
 		err := a.store.Mutate(r.Context(), code, func(tx *sql.Tx, rm *Room) error {
 			me, err := getPlayer(r.Context(), tx, code, pid)
 			if err != nil {
@@ -548,7 +571,11 @@ func (a *App) act(fn actionFunc) http.HandlerFunc {
 			if me == nil {
 				return forbidden("Join the room first")
 			}
-			return fn(r.Context(), tx, rm, me, r)
+			before := keyOf(rm)
+			if err := fn(r.Context(), tx, rm, me, r); err != nil {
+				return err
+			}
+			return a.afterAction(r.Context(), tx, rm, before)
 		})
 		if err != nil {
 			a.fail(w, r, err)
@@ -580,6 +607,11 @@ func (a *App) doTeam(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 		}
 		if rm.Game.InProgress() && handlers > 0 {
 			return &httpError{http.StatusConflict, "Can't become handler mid-round"}
+		}
+	}
+	if me.Team != team || me.Role != role {
+		if err := clearPlayerMarks(ctx, tx, rm.Code, me.ID); err != nil {
+			return err
 		}
 	}
 	// The change itself is not a game event, but bump the version via Mutate.
@@ -622,10 +654,18 @@ func (a *App) doReveal(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r 
 	if err != nil {
 		return gameError(err)
 	}
+	if err := clearCardMarks(ctx, tx, rm.Code, idx); err != nil {
+		return err
+	}
 	if err := addLog(ctx, tx, rm, LogEntry{Kind: "reveal", Team: team, Color: res.Card.Color, Nickname: me.Nickname, Text: strings.ToUpper(res.Card.Word)}); err != nil {
 		return err
 	}
 	if res.GameOver {
+		if g.Winner == Tide {
+			rm.TideWins++
+		} else {
+			rm.EmberWins++
+		}
 		return addLog(ctx, tx, rm, LogEntry{Kind: "win", Team: g.Winner, Text: fmt.Sprintf("%s wins: %s", g.Winner.Label(), g.EndReason)})
 	}
 	return nil
@@ -650,7 +690,7 @@ func (a *App) doNewRound(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, 
 	if me.Team == "none" {
 		return forbidden("Join a team to deal a new round")
 	}
-	rm.Game = newGame()
+	rm.Game = a.newGameFor(rm)
 	rm.Round++
 	if err := clearOldLog(ctx, tx, rm); err != nil {
 		return err

@@ -42,7 +42,57 @@ CREATE TABLE IF NOT EXISTS log (
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS log_room ON log(room, id);
+CREATE TABLE IF NOT EXISTS card_marks (
+	room      TEXT NOT NULL REFERENCES rooms(code) ON DELETE CASCADE,
+	card_idx  INTEGER NOT NULL,
+	player_id TEXT NOT NULL,
+	PRIMARY KEY (room, card_idx, player_id)
+);
 `
+
+// roomColumns are columns added after the first release. migrate adds any that
+// are missing, so it is safe to run on every startup (fresh or live DB).
+var roomColumns = []struct{ name, def string }{
+	{"deadline", "INTEGER NOT NULL DEFAULT 0"}, // turn deadline, unix ms; 0 = no timer running
+	{"timer_secs", "INTEGER NOT NULL DEFAULT 0"},
+	{"word_pack", "TEXT NOT NULL DEFAULT 'classic'"},
+	{"custom_words", "TEXT NOT NULL DEFAULT ''"}, // newline separated
+	{"ember_wins", "INTEGER NOT NULL DEFAULT 0"},
+	{"tide_wins", "INTEGER NOT NULL DEFAULT 0"},
+}
+
+const roomSelect = `SELECT code, version, round, game, updated_at, deadline, timer_secs, word_pack, custom_words, ember_wins, tide_wins FROM rooms`
+
+func migrate(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(rooms)`)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, c := range roomColumns {
+		if have[c.name] {
+			continue
+		}
+		if _, err := db.Exec(`ALTER TABLE rooms ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+			return fmt.Errorf("add column %s: %w", c.name, err)
+		}
+	}
+	return nil
+}
 
 const (
 	maxPlayersPerRoom = 40
@@ -52,6 +102,10 @@ const (
 var (
 	ErrRoomNotFound = errors.New("room not found")
 	ErrTooManyRooms = errors.New("too many active rooms")
+
+	// errNoChange can be returned from a Mutate callback to commit nothing
+	// (no write, no version bump) without reporting an error.
+	errNoChange = errors.New("no change")
 )
 
 type Player struct {
@@ -80,12 +134,48 @@ type Room struct {
 	Round     int
 	Game      *Game
 	UpdatedAt int64
+
+	Deadline  int64  // unix ms when the current turn phase times out; 0 = none
+	TimerSecs int    // 0 = timer off
+	Pack      string // classic | hard | mixed | custom (applies from the next round)
+	Custom    string // newline separated custom words
+	EmberWins int
+	TideWins  int
+}
+
+// Wins returns the series score for a team.
+func (rm *Room) Wins(t Team) int {
+	if t == Tide {
+		return rm.TideWins
+	}
+	return rm.EmberWins
+}
+
+// Mark is one operative's suggestion on a card.
+type Mark struct {
+	Card     int
+	PlayerID string
 }
 
 type Snapshot struct {
 	Room    Room
 	Players []Player
 	Log     []LogEntry
+	Marks   []Mark
+}
+
+type rowScanner interface{ Scan(dest ...any) error }
+
+func scanRoom(row rowScanner, rm *Room) error {
+	var blob string
+	if err := row.Scan(&rm.Code, &rm.Version, &rm.Round, &blob, &rm.UpdatedAt, &rm.Deadline, &rm.TimerSecs, &rm.Pack, &rm.Custom, &rm.EmberWins, &rm.TideWins); err != nil {
+		return err
+	}
+	rm.Game = new(Game)
+	if err := json.Unmarshal([]byte(blob), rm.Game); err != nil {
+		return fmt.Errorf("decode game: %w", err)
+	}
+	return nil
 }
 
 // Store uses a single serialised writer (BEGIN IMMEDIATE) and a separate
@@ -105,6 +195,10 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := w.Exec(schema); err != nil {
 		w.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	if err := migrate(w); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	r, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -161,28 +255,25 @@ func (s *Store) Mutate(ctx context.Context, code string, fn func(tx *sql.Tx, rm 
 	}
 	defer tx.Rollback()
 	var rm Room
-	var blob string
-	err = tx.QueryRowContext(ctx, `SELECT code, version, round, game, updated_at FROM rooms WHERE code = ?`, code).
-		Scan(&rm.Code, &rm.Version, &rm.Round, &blob, &rm.UpdatedAt)
+	err = scanRoom(tx.QueryRowContext(ctx, roomSelect+` WHERE code = ?`, code), &rm)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrRoomNotFound
 	}
 	if err != nil {
 		return err
 	}
-	rm.Game = new(Game)
-	if err := json.Unmarshal([]byte(blob), rm.Game); err != nil {
-		return fmt.Errorf("decode game: %w", err)
-	}
 	if err := fn(tx, &rm); err != nil {
+		if errors.Is(err, errNoChange) {
+			return nil
+		}
 		return err
 	}
 	out, err := json.Marshal(rm.Game)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, version=version+1, updated_at=? WHERE code=?`,
-		string(out), rm.Round, now(), code); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, version=version+1, updated_at=? WHERE code=?`,
+		string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, now(), code); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -228,6 +319,35 @@ func setPlayerTeam(ctx context.Context, tx *sql.Tx, code, id, team, role string)
 	return err
 }
 
+// toggleMark adds the player's mark on a card, or removes it if present.
+// It reports whether the mark now exists.
+func toggleMark(ctx context.Context, tx *sql.Tx, code string, card int, pid string) (bool, error) {
+	res, err := tx.ExecContext(ctx, `DELETE FROM card_marks WHERE room=? AND card_idx=? AND player_id=?`, code, card, pid)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return false, nil
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO card_marks(room, card_idx, player_id) VALUES (?,?,?)`, code, card, pid)
+	return true, err
+}
+
+func clearMarks(ctx context.Context, tx *sql.Tx, code string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM card_marks WHERE room=?`, code)
+	return err
+}
+
+func clearCardMarks(ctx context.Context, tx *sql.Tx, code string, card int) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM card_marks WHERE room=? AND card_idx=?`, code, card)
+	return err
+}
+
+func clearPlayerMarks(ctx context.Context, tx *sql.Tx, code, pid string) error {
+	_, err := tx.ExecContext(ctx, `DELETE FROM card_marks WHERE room=? AND player_id=?`, code, pid)
+	return err
+}
+
 func addLog(ctx context.Context, tx *sql.Tx, rm *Room, e LogEntry) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO log(room, round, kind, team, color, nickname, text, created_at) VALUES (?,?,?,?,?,?,?,?)`,
 		rm.Code, rm.Round, e.Kind, string(e.Team), string(e.Color), e.Nickname, e.Text, now())
@@ -257,6 +377,16 @@ func (s *Store) Touch(ctx context.Context, code string) error {
 	return err
 }
 
+// Deadline returns the room's current turn deadline (unix ms, 0 = none).
+func (s *Store) Deadline(ctx context.Context, code string) (int64, error) {
+	var d int64
+	err := s.r.QueryRowContext(ctx, `SELECT deadline FROM rooms WHERE code=?`, code).Scan(&d)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = ErrRoomNotFound
+	}
+	return d, err
+}
+
 // Snapshot loads a consistent view of a room (one read transaction).
 func (s *Store) Snapshot(ctx context.Context, code string) (*Snapshot, error) {
 	tx, err := s.r.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -265,18 +395,12 @@ func (s *Store) Snapshot(ctx context.Context, code string) (*Snapshot, error) {
 	}
 	defer tx.Rollback()
 	snap := &Snapshot{}
-	var blob string
-	err = tx.QueryRowContext(ctx, `SELECT code, version, round, game, updated_at FROM rooms WHERE code=?`, code).
-		Scan(&snap.Room.Code, &snap.Room.Version, &snap.Room.Round, &blob, &snap.Room.UpdatedAt)
+	err = scanRoom(tx.QueryRowContext(ctx, roomSelect+` WHERE code=?`, code), &snap.Room)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrRoomNotFound
 	}
 	if err != nil {
 		return nil, err
-	}
-	snap.Room.Game = new(Game)
-	if err := json.Unmarshal([]byte(blob), snap.Room.Game); err != nil {
-		return nil, fmt.Errorf("decode game: %w", err)
 	}
 
 	rows, err := tx.QueryContext(ctx, `SELECT id, nickname, team, role FROM players WHERE room=? ORDER BY joined_at, nickname, id`, code)
@@ -300,15 +424,32 @@ func (s *Store) Snapshot(ctx context.Context, code string) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var e LogEntry
 		var team, color string
 		if err := rows.Scan(&e.Kind, &team, &color, &e.Nickname, &e.Text); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		e.Team, e.Color = Team(team), Color(color)
 		snap.Log = append(snap.Log, e)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	rows, err = tx.QueryContext(ctx, `SELECT card_idx, player_id FROM card_marks WHERE room=? ORDER BY rowid`, code)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m Mark
+		if err := rows.Scan(&m.Card, &m.PlayerID); err != nil {
+			return nil, err
+		}
+		snap.Marks = append(snap.Marks, m)
 	}
 	return snap, rows.Err()
 }
@@ -324,6 +465,7 @@ func (s *Store) DeleteIdleRooms(ctx context.Context, maxIdle time.Duration) (int
 	const idle = `(SELECT code FROM rooms WHERE updated_at < ?)`
 	for _, q := range []string{
 		`DELETE FROM log WHERE room IN ` + idle,
+		`DELETE FROM card_marks WHERE room IN ` + idle,
 		`DELETE FROM players WHERE room IN ` + idle,
 	} {
 		if _, err := tx.ExecContext(ctx, q, cutoff); err != nil {

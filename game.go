@@ -287,3 +287,12 @@ func (g *Game) finish(winner Team, reason string) {
 	g.Winner, g.EndReason = winner, reason
 	g.Clue, g.Number, g.HasClue, g.Guesses = "", 0, false, 0
 }
+
+// TimeOut ends the current turn (in either phase) because the timer expired.
+func (g *Game) TimeOut() error {
+	if g.Over() {
+		return ErrGameOver
+	}
+	g.passTurn()
+	return nil
+}
