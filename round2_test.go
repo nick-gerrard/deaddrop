@@ -532,7 +532,7 @@ func TestTimerPauseAfterThreeIdleTimeoutsAndNonMemberExpiryNoTouch(t *testing.T)
 func TestLogCappedAt200PerRoom(t *testing.T) {
 	store, _, _ := newTestApp(t)
 	ctx := context.Background()
-	if err := store.CreateRoom(ctx, "LOGS", newGame(), Player{ID: "p1", Nickname: "Alice", Team: "ember", Role: "handler"}); err != nil {
+	if err := store.CreateRoom(ctx, "LOGS", newGame(), Player{ID: "p1", Nickname: "Alice", Team: "ember", Role: "handler"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Mutate(ctx, "LOGS", func(tx *sql.Tx, rm *Room) error {

@@ -1,4 +1,4 @@
-{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-round="{{.Round}}" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}">
+{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-round="{{.Round}}" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}" data-public="{{if .Public}}1{{else}}0{{end}}">
   <section class="scoreboard" aria-label="Scores">
     {{range .Teams}}
     <div class="score t-{{.Team}}"><span class="n">{{.Remaining}}</span><span class="lbl">{{.Label}} agents left</span></div>
@@ -65,13 +65,20 @@
               <label for="set-custom">Custom words (25–400)</label>
               <textarea id="set-custom" name="custom" rows="4" spellcheck="false" placeholder="Comma or newline separated words">{{.CustomWords}}</textarea>
             </div>
+            <div class="s-field">
+              <input type="hidden" name="public" value="0">
+              <label class="check-row check-dark" for="set-public">
+                <input id="set-public" type="checkbox" name="public" value="1"{{if .Public}} checked{{end}}>
+                <span>List in public lobby</span>
+              </label>
+            </div>
             <button type="submit" class="btn small primary wide">Save settings</button>
           </form>
           <div class="settings-reset">
             <button type="button" class="btn small danger wide" hx-post="/r/{{.Code}}/series-reset" hx-target="#game" hx-swap="outerHTML" hx-confirm="Reset the series score to 0 – 0?">Reset series score ({{.EmberWins}} – {{.TideWins}})</button>
           </div>
           {{else}}
-          <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b></p>
+          <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b> · Lobby: <b>{{if .Public}}Public{{else}}Private{{end}}</b></p>
           <p class="settings-note muted">Join a team to change mission settings.</p>
           {{end}}
         </div>

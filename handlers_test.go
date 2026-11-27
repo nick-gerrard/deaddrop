@@ -464,7 +464,7 @@ func TestStateTouchOnlyForMembers(t *testing.T) {
 func TestReadOnlySnapshotAndHeaders(t *testing.T) {
 	store, _, h := newTestApp(t)
 	ctx := context.Background()
-	if err := store.CreateRoom(ctx, "ABCD", newGame(), Player{ID: "p1", Nickname: "Alice", Team: "none", Role: "operative"}); err != nil {
+	if err := store.CreateRoom(ctx, "ABCD", newGame(), Player{ID: "p1", Nickname: "Alice", Team: "none", Role: "operative"}, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -521,7 +521,7 @@ func TestDeleteIdleRooms(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	if err := store.CreateRoom(ctx, "ABCD", newGame(), Player{ID: "p", Nickname: "n", Team: "none", Role: "operative"}); err != nil {
+	if err := store.CreateRoom(ctx, "ABCD", newGame(), Player{ID: "p", Nickname: "n", Team: "none", Role: "operative"}, false); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := store.DeleteIdleRooms(ctx, 48*3600e9); n != 0 {
