@@ -1,0 +1,16 @@
+name = "deaddrop"
+subdomain = "deaddrop"
+on = "push"
+
+[backend]
+runtime = "go"
+workdir = "."
+project = "."
+build = "/snap/go/current/bin/go build -o deaddrop ."
+start = "deaddrop"
+test = "/snap/go/current/bin/go test ./..."
+health = "/healthz"
+
+[backend.env]
+DEADDROP_ADDR = "127.0.0.1:{port}"
+DEADDROP_DB = "deaddrop.db"
