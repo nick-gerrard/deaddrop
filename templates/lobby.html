@@ -1,4 +1,4 @@
-{{define "lobby"}}{{if .Rooms}}<ul class="lobby-rows">{{range .Rooms}}<li class="lobby-row">
+{{define "lobby"}}<div id="lobby-list" hx-get="/lobby?v={{.Version}}" hx-trigger="every 5s" hx-target="#lobby-list" hx-swap="outerHTML">{{if .Rooms}}<ul class="lobby-rows">{{range .Rooms}}<li class="lobby-row">
   <div class="lobby-info">
     <div class="lobby-top">
       <span class="lobby-code">{{.Code}}</span>
@@ -9,4 +9,4 @@
     </div>
   </div>
   <a class="btn small primary lobby-join" href="/r/{{.Code}}">Join</a>
-</li>{{end}}</ul>{{else}}<p class="lobby-empty">No public rooms right now. Create one and tick List in public lobby.</p>{{end}}{{end}}
+</li>{{end}}</ul>{{else}}<p class="lobby-empty">No public rooms right now. Create one and tick List in public lobby.</p>{{end}}</div>{{end}}

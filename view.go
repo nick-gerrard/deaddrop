@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -392,7 +394,8 @@ type LobbyItemView struct {
 }
 
 type LobbyView struct {
-	Rooms []LobbyItemView
+	Version string
+	Rooms   []LobbyItemView
 }
 
 func lobbyStatus(round int, g *Game) string {
@@ -418,14 +421,18 @@ func formatAgo(nowSec, updatedSec int64) string {
 
 func buildLobbyView(rooms []LobbyRoom, nowSec int64) LobbyView {
 	v := LobbyView{Rooms: make([]LobbyItemView, 0, len(rooms))}
+	h := sha256.New()
 	for _, r := range rooms {
-		v.Rooms = append(v.Rooms, LobbyItemView{
+		item := LobbyItemView{
 			Code:       r.Code,
 			EmberCount: r.EmberCount,
 			TideCount:  r.TideCount,
 			Status:     lobbyStatus(r.Round, r.Game),
 			Ago:        formatAgo(nowSec, r.UpdatedAt),
-		})
+		}
+		v.Rooms = append(v.Rooms, item)
+		fmt.Fprintf(h, "%s|%d|%d|%s|%s\n", item.Code, item.EmberCount, item.TideCount, item.Status, item.Ago)
 	}
+	v.Version = hex.EncodeToString(h.Sum(nil))[:12]
 	return v
 }

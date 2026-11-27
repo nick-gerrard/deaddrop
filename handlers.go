@@ -394,7 +394,13 @@ func (a *App) lobby(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, r, err)
 		return
 	}
-	a.render(w, http.StatusOK, "lobby", buildLobbyView(rooms, nowSec))
+	v := buildLobbyView(rooms, nowSec)
+	if have := r.URL.Query().Get("v"); have != "" && have == v.Version {
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	a.render(w, http.StatusOK, "lobby", v)
 }
 
 func (a *App) homeError(w http.ResponseWriter, r *http.Request, status int, nick, code, msg string) {

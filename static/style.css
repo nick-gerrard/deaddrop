@@ -134,6 +134,7 @@ label { font: 600 .78rem var(--sans); letter-spacing: .06em; text-transform: upp
 .title { font: 400 2.1rem/1.05 var(--type); letter-spacing: .08em; margin-bottom: 8px; }
 .tagline { font-size: .92rem; color: #4d4430; margin-bottom: 18px; }
 .gate-form { display: grid; gap: 8px; }
+.gate-form input:not([type="checkbox"]) { min-height: 44px; }
 .gate-form .btn { width: 100%; margin-top: 6px; background: #2b2f36; color: #f2eee3; border-color: #111; }
 .gate-form .btn.primary { background: #1d1f24; color: var(--accent); }
 .gate-form .btn:hover { background: #000; }

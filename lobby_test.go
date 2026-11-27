@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+var lobbyVersionRe = regexp.MustCompile(`hx-get="/lobby\?v=([0-9a-f]+)"`)
 
 func TestListPublicRoomsDB(t *testing.T) {
 	store, _, _ := newTestApp(t)
@@ -213,5 +216,66 @@ func TestLobbyEndpointAndToggle(t *testing.T) {
 	_, lobbyBody = guest.get("/lobby")
 	if !strings.Contains(lobbyBody, pubRoom) {
 		t.Errorf("re-publicized room missing from lobby: %s", lobbyBody)
+	}
+}
+
+func TestLobbyFingerprintAnd204(t *testing.T) {
+	_, app, h := newTestApp(t)
+	nowT := time.Now()
+	app.now = func() time.Time { return nowT }
+
+	guest := newClient(t, h)
+	code, body := guest.get("/lobby")
+	if code != http.StatusOK {
+		t.Fatalf("initial GET /lobby = %d, want 200", code)
+	}
+	if !strings.Contains(body, `id="lobby-list"`) || !strings.Contains(body, `hx-swap="outerHTML"`) {
+		t.Fatalf("lobby fragment missing #lobby-list outerHTML wrapper: %s", body)
+	}
+	m := lobbyVersionRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("lobby fragment missing hx-get=/lobby?v=...: %s", body)
+	}
+	vEmpty := m[1]
+
+	// Same v -> 204 No Content.
+	if code, b := guest.get("/lobby?v=" + vEmpty); code != http.StatusNoContent || b != "" {
+		t.Fatalf("same v on empty lobby = %d %q, want 204", code, b)
+	}
+	// Different v -> 200 OK.
+	if code, _ := guest.get("/lobby?v=deadbeef0000"); code != http.StatusOK {
+		t.Fatalf("different v = %d, want 200", code)
+	}
+
+	// Create a public room -> old v now returns 200 with a new v.
+	pub := newClient(t, h)
+	pub.post("/create", url.Values{"nickname": {"Alice"}, "public": {"1"}})
+	code, body = guest.get("/lobby?v=" + vEmpty)
+	if code != http.StatusOK {
+		t.Fatalf("after create with old v = %d, want 200", code)
+	}
+	m = lobbyVersionRe.FindStringSubmatch(body)
+	if m == nil || m[1] == vEmpty {
+		t.Fatalf("expected new v after create, got %v", m)
+	}
+	vWithRoom := m[1]
+
+	// Same v -> 204.
+	if code, _ := guest.get("/lobby?v=" + vWithRoom); code != http.StatusNoContent {
+		t.Fatalf("same v with room = %d, want 204", code)
+	}
+
+	// Advance clock so rendered "ago" string changes -> 200 with new v.
+	nowT = nowT.Add(2 * time.Minute)
+	code, body = guest.get("/lobby?v=" + vWithRoom)
+	if code != http.StatusOK {
+		t.Fatalf("after time-ago change = %d, want 200", code)
+	}
+	m = lobbyVersionRe.FindStringSubmatch(body)
+	if m == nil || m[1] == vWithRoom {
+		t.Fatalf("expected new v after time-ago change, got %v", m)
+	}
+	if code, _ := guest.get("/lobby?v=" + m[1]); code != http.StatusNoContent {
+		t.Fatalf("same v after time-ago change = %d, want 204", code)
 	}
 }

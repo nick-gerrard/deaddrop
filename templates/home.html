@@ -21,7 +21,7 @@
   </div>
   <section class="lobby-panel" aria-label="Open rooms">
     <h2>Open rooms</h2>
-    <div id="lobby-list" hx-get="/lobby" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <div id="lobby-list" hx-get="/lobby" hx-trigger="load, every 5s" hx-target="#lobby-list" hx-swap="outerHTML">
       <p class="lobby-empty">Loading open rooms…</p>
     </div>
   </section>

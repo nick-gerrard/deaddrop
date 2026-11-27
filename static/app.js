@@ -13,7 +13,7 @@
   }
   function isStateReq(e) {
     var path = ((e.detail && e.detail.pathInfo) || {}).requestPath || '';
-    return path.indexOf('/state') >= 0 || path === '/lobby';
+    return path.indexOf('/state') >= 0 || path.indexOf('/lobby') === 0;
   }
 
   // ---------- sound & mute ----------
