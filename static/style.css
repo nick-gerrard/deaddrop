@@ -535,7 +535,9 @@ dialog.sheet[open] .sheet-inner { animation: rise .22s ease both; }
 .mission-info summary::after { content: "▸"; font-family: var(--sans); font-size: 1rem; color: var(--text-muted); }
 .mission-info[open] summary::after { content: "▾"; }
 .info-body { margin-top: var(--sp-3); display: grid; gap: var(--sp-4); }
-.spec-join { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.spec-join { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.spec-join .btn { flex: 1 1 0; }
+.spec-join-lead { flex-basis: 100%; margin: 0; }
 .info-rosters { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
 .roster h3 { font: 400 1rem var(--type); letter-spacing: .12em; margin-bottom: var(--sp-1); }
 .roster.t-ember h3 { color: var(--ember); }

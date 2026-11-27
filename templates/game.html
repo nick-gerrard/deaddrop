@@ -138,17 +138,18 @@
         <div class="turn-line b-{{.Banner.Class}}" role="status">{{.WaitLine}}</div>
         {{end}}
       </div>
+      {{if and (eq .MeTeam "none") (not .Over)}}
+      <div class="spec-join" role="group" aria-label="Join a team">
+        <p class="spec-join-lead">You're watching. Jump in as an operative:</p>
+        <button type="button" class="btn" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"ember","role":"operative"}'>Join EMBER</button>
+        <button type="button" class="btn" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"tide","role":"operative"}'>Join TIDE</button>
+      </div>
+      {{end}}
     </section>
 
     <details class="panel mission-info" id="mission-info">
       <summary>Mission info</summary>
       <div class="info-body">
-        {{if and (eq .MeTeam "none") (not .Over)}}
-        <div class="spec-join">
-          <button type="button" class="btn" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"ember","role":"operative"}'>Join EMBER as operative</button>
-          <button type="button" class="btn" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"tide","role":"operative"}'>Join TIDE as operative</button>
-        </div>
-        {{end}}
 
         <div class="info-rosters">
           {{range .Teams}}
