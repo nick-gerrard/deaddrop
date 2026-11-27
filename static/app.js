@@ -26,7 +26,7 @@
     var btn = document.getElementById('mute-btn');
     if (!btn) return;
     btn.setAttribute('aria-pressed', muted ? 'true' : 'false');
-    btn.textContent = muted ? 'Muted' : 'Sound on';
+    btn.textContent = muted ? 'Muted' : 'Sound';
   }
   updateMuteBtn();
 
@@ -255,13 +255,19 @@
 
     if (!document.querySelector('.overlay')) delete document.documentElement.dataset.ovx;
 
-    // Sync series score and visibility tag in header
+    // Sync series score in header (hide when 0 - 0)
     var g = document.getElementById('game');
     if (g) {
-      var ew = document.querySelector('#series-score [data-wins="ember"]');
-      var tw = document.querySelector('#series-score [data-wins="tide"]');
-      if (ew && g.dataset.emberWins != null) ew.textContent = g.dataset.emberWins;
-      if (tw && g.dataset.tideWins != null) tw.textContent = g.dataset.tideWins;
+      var ss = document.getElementById('series-score');
+      if (ss && g.dataset.emberWins != null && g.dataset.tideWins != null) {
+        var ewNum = Number(g.dataset.emberWins) || 0;
+        var twNum = Number(g.dataset.tideWins) || 0;
+        var ew = ss.querySelector('[data-wins="ember"]');
+        var tw = ss.querySelector('[data-wins="tide"]');
+        if (ew) ew.textContent = ewNum;
+        if (tw) tw.textContent = twNum;
+        ss.classList.toggle('hidden', ewNum === 0 && twNum === 0);
+      }
       var vis = document.getElementById('room-vis');
       if (vis && g.dataset.public != null) {
         var isPub = g.dataset.public === '1';

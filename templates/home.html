@@ -6,7 +6,7 @@
     <p class="tagline">A game of secret signals for two rival spy rings. Handlers know the key. Operatives only have a one-word clue.</p>
     {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
     <form method="post" class="gate-form">
-      <label for="nickname">Codename (your nickname)</label>
+      <label for="nickname">Codename</label>
       <input id="nickname" name="nickname" value="{{.Nick}}" maxlength="20" required autocomplete="nickname" placeholder="e.g. Fox">
       <label class="check-row" for="public">
         <input id="public" type="checkbox" name="public" value="1">

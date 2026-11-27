@@ -1,6 +1,11 @@
 {{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-phase="{{.Phase}}" data-round="{{.Round}}" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}" data-public="{{if .Public}}1{{else}}0{{end}}">
 {{if .IsSetup}}
   <div class="setup">
+    <div class="setup-bar">
+      <span class="vis-tag {{if .Public}}vis-public{{else}}vis-private{{end}}" id="room-vis">{{if .Public}}PUBLIC{{else}}PRIVATE{{end}}</span>
+      <button type="button" class="btn compact" id="copy-link" data-path="/r/{{.Code}}">Copy invite link</button>
+    </div>
+
     <section class="setup-teams" aria-label="Teams">
       {{range .Teams}}
       <div class="panel setup-team t-{{.Team}}{{if .Mine}} mine{{end}}">
@@ -25,10 +30,12 @@
       {{end}}
     </section>
 
+    {{if or .Specs (ne .MeTeam "none")}}
     <div class="setup-specs">
-      <span class="specs-line">Spectators: {{range $i, $s := .Specs}}{{if $i}}, {{end}}{{$s.Nickname}}{{if $s.You}} <em>(you)</em>{{end}}{{else}}none{{end}}</span>
-      {{if ne .MeTeam "none"}}<button type="button" class="btn small" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"none","role":"operative"}'>Spectate</button>{{end}}
+      {{if .Specs}}<span class="specs-line">Spectators: {{range $i, $s := .Specs}}{{if $i}}, {{end}}{{$s.Nickname}}{{if $s.You}} <em>(you)</em>{{end}}{{end}}</span>{{else}}<span></span>{{end}}
+      {{if ne .MeTeam "none"}}<button type="button" class="btn compact" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"none","role":"operative"}'>Spectate</button>{{end}}
     </div>
+    {{end}}
 
     <div class="setup-start">
       {{if ne .MeTeam "none"}}
@@ -67,15 +74,15 @@
               <span>List in public lobby</span>
             </label>
           </div>
-          <button type="submit" class="btn primary wide">Save settings</button>
+          <button type="submit" class="btn wide">Save settings</button>
         </form>
         {{if or .EmberWins .TideWins}}
         <div class="settings-reset">
-          <button type="button" class="btn small danger wide" hx-post="/r/{{.Code}}/series-reset" hx-target="#game" hx-swap="outerHTML" hx-confirm="Reset the series score to 0 – 0?">Reset series score ({{.EmberWins}} – {{.TideWins}})</button>
+          <button type="button" class="btn danger wide" hx-post="/r/{{.Code}}/series-reset" hx-target="#game" hx-swap="outerHTML" hx-confirm="Reset the series score to 0 – 0?">Reset series score ({{.EmberWins}} – {{.TideWins}})</button>
         </div>
         {{end}}
         {{else}}
-        <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b> · Lobby: <b>{{if .Public}}Public{{else}}Private{{end}}</b></p>
+        <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b></p>
         <p class="settings-note muted">Join a team to change mission settings.</p>
         {{end}}
       </div>
@@ -85,15 +92,17 @@
   <div class="play">
     <section class="play-bar" aria-label="Status">
       <span class="you-pill t-{{.MeTeam}}">{{.YouLine}}</span>
-      <div class="play-counts" aria-label="Remaining agents">
-        {{range .Teams}}<span class="count-pill t-{{.Team}}">{{.Label}} <b>{{.Remaining}}</b></span>{{end}}
+      <div class="play-meta">
+        <div class="play-counts" aria-label="Remaining agents">
+          {{range .Teams}}<span class="count-pill t-{{.Team}}">{{.Label}} <b>{{.Remaining}}</b></span>{{end}}
+        </div>
+        {{if .Deadline}}<span class="timer-pill{{if .TimerLow}} low{{end}}" data-deadline="{{.Deadline}}" data-now="{{.NowMs}}" aria-label="Turn timer">{{.TimerText}}</span>{{end}}
       </div>
-      {{if .Deadline}}<span class="timer-pill{{if .TimerLow}} low{{end}}" data-deadline="{{.Deadline}}" data-now="{{.NowMs}}" aria-label="Turn timer">{{.TimerText}}</span>{{end}}
     </section>
 
     <section class="table" aria-label="Board">
       <div class="board{{if .ShowKey}} keyview{{end}}">
-        {{range .Cards}}{{if .Clickable}}<div class="{{.Class}} clickable" data-i="{{.Index}}"><button type="button" class="card-face" data-select-card="{{.Index}}" aria-label="{{.Label}}"><span class="word">{{.Word}}</span></button>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}<div class="card-confirm"><button type="button" class="ca-reveal" hx-post="/r/{{$.Code}}/reveal" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">Tap again to reveal</button><button type="button" class="ca-mark{{if .MyMark}} marked{{end}}" hx-post="/r/{{$.Code}}/mark" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">{{if .MyMark}}Unmark{{else}}Mark{{end}}</button></div></div>{{else}}<div class="{{.Class}}" data-i="{{.Index}}"><span class="word">{{.Word}}</span><span class="sr">{{.Label}}</span>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}{{if .By}}<span class="by">{{.By}}</span>{{end}}</div>{{end}}
+        {{range .Cards}}{{if .Clickable}}<div class="{{.Class}} clickable" data-i="{{.Index}}"><button type="button" class="card-face" data-select-card="{{.Index}}" aria-label="{{.Label}}"><span class="word">{{.Word}}</span></button>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}<div class="card-confirm"><button type="button" class="ca-reveal" hx-post="/r/{{$.Code}}/reveal" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">Tap again to reveal</button><button type="button" class="ca-mark{{if .MyMark}} marked{{end}}" hx-post="/r/{{$.Code}}/mark" hx-vals='{"card":"{{.Index}}"}' hx-target="#game" hx-swap="outerHTML">{{if .MyMark}}Unmark{{else}}Mark{{end}}</button></div></div>{{else}}<div class="{{.Class}}" data-i="{{.Index}}"><span class="word">{{.Word}}</span><span class="sr">{{.Label}}</span>{{if .Marks}}<div class="marks">{{range .Marks}}<span class="chip{{if .Mine}} mine{{end}}" title="{{.Nickname}}">{{.Initials}}</span>{{end}}</div>{{end}}</div>{{end}}
         {{end}}
       </div>
 
@@ -104,7 +113,7 @@
           {{if ne .MeTeam "none"}}<button type="button" class="btn primary" hx-post="/r/{{.Code}}/new">Next round</button>{{end}}
         </div>
         {{else if .CanClue}}
-        <form class="clue-form" hx-post="/r/{{.Code}}/clue" autocomplete="off">
+        <form class="clue-form b-{{.Banner.Class}}" hx-post="/r/{{.Code}}/clue" autocomplete="off">
           <div class="field grow">
             <label for="clue-word">Clue (one word)</label>
             <input id="clue-word" name="clue" maxlength="24" required autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
@@ -136,8 +145,8 @@
       <div class="info-body">
         {{if and (eq .MeTeam "none") (not .Over)}}
         <div class="spec-join">
-          <button type="button" class="btn small" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"ember","role":"operative"}'>Join EMBER as operative</button>
-          <button type="button" class="btn small" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"tide","role":"operative"}'>Join TIDE as operative</button>
+          <button type="button" class="btn" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"ember","role":"operative"}'>Join EMBER as operative</button>
+          <button type="button" class="btn" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"tide","role":"operative"}'>Join TIDE as operative</button>
         </div>
         {{end}}
 
@@ -170,10 +179,16 @@
         </div>
 
         <div class="info-section info-settings">
-          <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b> · Lobby: <b>{{if .Public}}Public{{else}}Private{{end}}</b></p>
-          {{if .CanSettings}}
-          <button type="button" class="btn small" hx-post="/r/{{.Code}}/settings" hx-vals='{"public":"{{if .Public}}0{{else}}1{{end}}"}'>{{if .Public}}Make private{{else}}List in public lobby{{end}}</button>
-          {{end}}
+          <div class="info-meta">
+            <span class="vis-tag {{if .Public}}vis-public{{else}}vis-private{{end}}" id="room-vis">{{if .Public}}PUBLIC{{else}}PRIVATE{{end}}</span>
+            <p class="settings-note">Timer: <b>{{if .TimerSecs}}{{.TimerSecs}}s{{else}}Off{{end}}</b> · Pack: <b>{{.PackLabel}}</b></p>
+          </div>
+          <div class="info-setting-btns">
+            <button type="button" class="btn compact" id="copy-link" data-path="/r/{{.Code}}">Copy invite link</button>
+            {{if .CanSettings}}
+            <button type="button" class="btn compact" hx-post="/r/{{.Code}}/settings" hx-vals='{"public":"{{if .Public}}0{{else}}1{{end}}"}'>{{if .Public}}Make private{{else}}List in public lobby{{end}}</button>
+            {{end}}
+          </div>
         </div>
 
         {{if ne .MeTeam "none"}}
@@ -214,7 +229,6 @@
         </div>
         {{end}}
       </div>
-      <p class="fine">The full key is now revealed on the board.</p>
       <div class="actions">
         {{if ne .MeTeam "none"}}<button type="button" class="btn primary" hx-post="/r/{{.Code}}/new">Next round</button>{{end}}
         <button type="button" class="btn" data-dismiss-overlay>View board</button>
