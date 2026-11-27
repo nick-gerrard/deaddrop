@@ -1,0 +1,100 @@
+{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms" hx-target="#game" hx-swap="outerHTML">
+  <section class="scoreboard" aria-label="Scores">
+    {{range .Teams}}
+    <div class="score t-{{.Team}}"><span class="n">{{.Remaining}}</span><span class="lbl">{{.Label}} agents left</span></div>
+    {{end}}
+    <div class="banner b-{{.Banner.Class}}" role="status"><p>
+      <strong>{{.Banner.Head}}</strong>{{if .Banner.ClueWord}} — clue: <span class="clue">{{.Banner.ClueWord}} {{.Banner.ClueNum}}</span>, {{.Banner.Detail}}{{end}}
+    </p></div>
+  </section>
+
+  <div class="layout">
+    <section class="table" aria-label="Board">
+      {{if .Hint}}<p class="hint">{{.Hint}}</p>{{end}}
+      <div class="board{{if .ShowKey}} keyview{{end}}">
+        {{range .Cards}}{{if .Clickable}}<button type="button" class="{{.Class}}" data-i="{{.Index}}" aria-label="{{.Label}}" hx-post="/r/{{$.Code}}/reveal" hx-vals='{"card":"{{.Index}}"}'><span class="word">{{.Word}}</span></button>{{else}}<div class="{{.Class}}" data-i="{{.Index}}"><span class="word">{{.Word}}</span><span class="sr">{{.Label}}</span>{{if .By}}<span class="by">{{.By}}</span>{{end}}</div>{{end}}
+        {{end}}
+      </div>
+
+      {{if .CanClue}}
+      <form class="clue-form" hx-post="/r/{{.Code}}/clue" autocomplete="off">
+        <div class="field grow">
+          <label for="clue-word">Clue (one word)</label>
+          <input id="clue-word" name="clue" hx-preserve maxlength="24" required autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
+        </div>
+        <div class="field">
+          <label for="clue-num">Number</label>
+          <select id="clue-num" name="number" hx-preserve>
+            <option value="0">0 (unlimited)</option>
+            <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option>
+            <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+            <option value="7">7</option><option value="8">8</option><option value="9">9</option>
+          </select>
+        </div>
+        <button class="btn primary" type="submit">Send clue</button>
+      </form>
+      {{end}}
+      {{if .CanEnd}}<div class="actions"><button type="button" class="btn" hx-post="/r/{{.Code}}/end">End turn</button></div>{{end}}
+    </section>
+
+    <aside class="side" aria-label="Operation details">
+      <section class="panel you">
+        <h2>Your role</h2>
+        <p class="role">You are <b>{{.Role}}</b>.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Rosters</h2>
+        {{range .Teams}}
+        <div class="roster t-{{.Team}}{{if .Mine}} mine{{end}}">
+          <h3>{{.Label}}</h3>
+          <p class="sub">Handlers</p>
+          <ul>{{range .Handlers}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</li>{{else}}<li class="none">none</li>{{end}}</ul>
+          <p class="sub">Operatives</p>
+          <ul>{{range .Operatives}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</li>{{else}}<li class="none">none</li>{{end}}</ul>
+          <div class="join-btns">
+            <button type="button" class="btn small" aria-pressed="{{if and .Mine (eq $.MeRole "operative")}}true{{else}}false{{end}}" hx-post="/r/{{$.Code}}/team" hx-vals='{"team":"{{.Team}}","role":"operative"}'>Operative</button>
+            <button type="button" class="btn small" aria-pressed="{{if and .Mine (eq $.MeRole "handler")}}true{{else}}false{{end}}" hx-post="/r/{{$.Code}}/team" hx-vals='{"team":"{{.Team}}","role":"handler"}'>Handler</button>
+          </div>
+        </div>
+        {{end}}
+        <div class="roster spectators">
+          <h3>SPECTATORS</h3>
+          <ul>{{range .Specs}}<li>{{.Nickname}}{{if .You}} <em>(you)</em>{{end}}</li>{{else}}<li class="none">none</li>{{end}}</ul>
+          <div class="join-btns">
+            <button type="button" class="btn small" aria-pressed="{{if eq .MeTeam "none"}}true{{else}}false{{end}}" hx-post="/r/{{.Code}}/team" hx-vals='{"team":"none","role":"operative"}'>Spectate</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Mission log</h2>
+        <ol class="log">
+          {{range .Log}}<li class="k-{{.Kind}}">
+            {{if .Team}}<span class="tag t-{{.Team}}">{{.TeamLabel}}</span> {{end}}
+            {{if eq .Kind "clue"}}<b>{{.Nickname}}</b> clued <span class="mono">{{.Text}}</span>
+            {{else if eq .Kind "reveal"}}<b>{{.Nickname}}</b> revealed <span class="mono">{{.Text}}</span> <span class="res r-{{.Color}}">{{.ColorLabel}}</span>
+            {{else}}{{if .Nickname}}<b>{{.Nickname}}</b> {{end}}{{.Text}}{{end}}
+          </li>{{else}}<li class="none">No activity yet.</li>{{end}}
+        </ol>
+      </section>
+
+      <button type="button" class="btn danger wide" hx-post="/r/{{.Code}}/new" hx-confirm="Deal a fresh board? The current round will be lost for everyone in the room.">New round</button>
+    </aside>
+  </div>
+
+  {{if .Over}}
+  <div class="overlay t-{{.Winner.Team}}" role="dialog" aria-labelledby="win-title">
+    <div class="dossier">
+      <p class="stamp-big">CASE CLOSED</p>
+      <h2 id="win-title">{{.Winner.Label}} WINS</h2>
+      <p class="reason">{{.Game.EndReason}}</p>
+      <p class="fine">The full key is now revealed on the board.</p>
+      <div class="actions">
+        <button type="button" class="btn primary" hx-post="/r/{{.Code}}/new" hx-confirm="Deal a fresh board?">New round</button>
+        <button type="button" class="btn" onclick="document.documentElement.dataset.ovx='1'">View board</button>
+      </div>
+    </div>
+  </div>
+  {{end}}
+</div>{{end}}

@@ -1,0 +1,19 @@
+{{template "head" .}}
+<main class="gate">
+  <div class="dossier">
+    <p class="classified">CLASSIFIED</p>
+    <h1 class="title">DEAD DROP</h1>
+    <p class="tagline">A game of secret signals for two rival spy rings. Handlers know the key. Operatives only have a one-word clue.</p>
+    {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" class="gate-form">
+      <label for="nickname">Codename (your nickname)</label>
+      <input id="nickname" name="nickname" value="{{.Nick}}" maxlength="20" required autocomplete="nickname" placeholder="e.g. Fox">
+      <button class="btn primary" type="submit" formaction="/create">Create room</button>
+      <div class="or"><span>or join a room</span></div>
+      <label for="code">Room code</label>
+      <input id="code" name="code" value="{{.Code}}" maxlength="4" minlength="4" pattern="[A-Za-z]{4}" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABCD" class="code-input">
+      <button class="btn" type="submit" formaction="/join">Join</button>
+    </form>
+  </div>
+</main>
+{{template "foot" .}}

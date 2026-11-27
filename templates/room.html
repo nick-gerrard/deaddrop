@@ -1,0 +1,16 @@
+{{template "head" .}}
+<header class="top">
+  <div class="brand">
+    <span class="classified">CLASSIFIED</span>
+    <h1>DEAD DROP</h1>
+  </div>
+  <div class="case">CASE No. <b>{{.Code}}</b></div>
+  <div class="top-actions">
+    <span class="agent">Agent <b>{{.MeName}}</b></span>
+    <button type="button" class="btn small" id="copy-link" data-path="/r/{{.Code}}">Copy invite link</button>
+  </div>
+</header>
+<div class="wrap">
+{{template "game" .}}
+</div>
+{{template "foot" .}}

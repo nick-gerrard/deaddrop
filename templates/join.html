@@ -1,0 +1,16 @@
+{{template "head" .}}
+<main class="gate">
+  <div class="dossier">
+    <p class="classified">CLASSIFIED</p>
+    <h1 class="title">CASE No. {{.Code}}</h1>
+    <p class="tagline">You've been invited to join an operation. Choose a codename to enter.</p>
+    {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
+    <form method="post" action="/r/{{.Code}}/join" class="gate-form">
+      <label for="nickname">Codename (your nickname)</label>
+      <input id="nickname" name="nickname" value="{{.Nick}}" maxlength="20" required autofocus autocomplete="nickname" placeholder="e.g. Fox">
+      <button class="btn primary" type="submit">Enter room</button>
+    </form>
+    <p class="fine"><a href="/">Back to start</a></p>
+  </div>
+</main>
+{{template "foot" .}}
