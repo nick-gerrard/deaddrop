@@ -160,6 +160,7 @@ func (a *App) Routes() http.Handler {
 	})
 	mux.Handle("GET /static/", cacheFor(http.FileServerFS(assets)))
 	mux.HandleFunc("GET /{$}", a.home)
+	mux.HandleFunc("GET /lobby", a.lobby)
 	mux.HandleFunc("POST /create", a.create)
 	mux.HandleFunc("POST /join", a.joinByCode)
 	mux.HandleFunc("GET /r/{code}", a.room)
@@ -380,6 +381,22 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	a.render(w, http.StatusOK, "home.html", pageData{AssetV: a.assetV, Nick: savedNick(r)})
 }
 
+const (
+	lobbyMaxAge = 30 * time.Minute
+	lobbyLimit  = 20
+)
+
+func (a *App) lobby(w http.ResponseWriter, r *http.Request) {
+	nowSec := a.now().Unix()
+	since := nowSec - int64(lobbyMaxAge/time.Second)
+	rooms, err := a.store.ListPublicRooms(r.Context(), since, lobbyLimit)
+	if err != nil {
+		a.fail(w, r, err)
+		return
+	}
+	a.render(w, http.StatusOK, "lobby", buildLobbyView(rooms, nowSec))
+}
+
 func (a *App) homeError(w http.ResponseWriter, r *http.Request, status int, nick, code, msg string) {
 	a.render(w, status, "home.html", pageData{AssetV: a.assetV, Nick: nick, Code: code, Error: msg})
 }
@@ -395,10 +412,12 @@ func (a *App) create(w http.ResponseWriter, r *http.Request) {
 		a.homeError(w, r, http.StatusTooManyRequests, nick, "", "Too many rooms created recently. Please wait a few minutes.")
 		return
 	}
+	pubVal := r.FormValue("public")
+	public := pubVal == "1" || pubVal == "on" || pubVal == "true"
 	id := ensurePlayerID(w, r)
 	for range 10 {
 		code := newCode()
-		err := a.store.CreateRoom(r.Context(), code, newGame(), Player{ID: id, Nickname: nick, Team: "none", Role: "operative"})
+		err := a.store.CreateRoom(r.Context(), code, newGame(), Player{ID: id, Nickname: nick, Team: "none", Role: "operative"}, public)
 		if isUniqueViolation(err) {
 			continue
 		}

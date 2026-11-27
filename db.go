@@ -60,9 +60,10 @@ var roomColumns = []struct{ name, def string }{
 	{"ember_wins", "INTEGER NOT NULL DEFAULT 0"},
 	{"tide_wins", "INTEGER NOT NULL DEFAULT 0"},
 	{"idle_timeouts", "INTEGER NOT NULL DEFAULT 0"},
+	{"public", "INTEGER NOT NULL DEFAULT 0"},
 }
 
-const roomSelect = `SELECT code, version, round, game, updated_at, deadline, timer_secs, word_pack, custom_words, ember_wins, tide_wins, idle_timeouts FROM rooms`
+const roomSelect = `SELECT code, version, round, game, updated_at, deadline, timer_secs, word_pack, custom_words, ember_wins, tide_wins, idle_timeouts, public FROM rooms`
 
 func migrate(db *sql.DB) error {
 	rows, err := db.Query(`PRAGMA table_info(rooms)`)
@@ -144,6 +145,7 @@ type Room struct {
 	EmberWins    int
 	TideWins     int
 	IdleTimeouts int
+	Public       bool
 }
 
 // Wins returns the series score for a team.
@@ -169,11 +171,20 @@ type Snapshot struct {
 
 type rowScanner interface{ Scan(dest ...any) error }
 
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func scanRoom(row rowScanner, rm *Room) error {
 	var blob string
-	if err := row.Scan(&rm.Code, &rm.Version, &rm.Round, &blob, &rm.UpdatedAt, &rm.Deadline, &rm.TimerSecs, &rm.Pack, &rm.Custom, &rm.EmberWins, &rm.TideWins, &rm.IdleTimeouts); err != nil {
+	var pub int
+	if err := row.Scan(&rm.Code, &rm.Version, &rm.Round, &blob, &rm.UpdatedAt, &rm.Deadline, &rm.TimerSecs, &rm.Pack, &rm.Custom, &rm.EmberWins, &rm.TideWins, &rm.IdleTimeouts, &pub); err != nil {
 		return err
 	}
+	rm.Public = pub != 0
 	rm.Game = new(Game)
 	if err := json.Unmarshal([]byte(blob), rm.Game); err != nil {
 		return fmt.Errorf("decode game: %w", err)
@@ -220,7 +231,7 @@ func (s *Store) Close() {
 func now() int64 { return time.Now().Unix() }
 
 // CreateRoom inserts a new room and its first player atomically.
-func (s *Store) CreateRoom(ctx context.Context, code string, g *Game, p Player) error {
+func (s *Store) CreateRoom(ctx context.Context, code string, g *Game, p Player, public bool) error {
 	blob, err := json.Marshal(g)
 	if err != nil {
 		return err
@@ -240,7 +251,7 @@ func (s *Store) CreateRoom(ctx context.Context, code string, g *Game, p Player) 
 		}
 	}
 	t := now()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(code, game, created_at, updated_at) VALUES (?,?,?,?)`, code, string(blob), t, t); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO rooms(code, game, created_at, updated_at, public) VALUES (?,?,?,?,?)`, code, string(blob), t, t, boolToInt(public)); err != nil {
 		return err
 	}
 	if err := upsertPlayer(ctx, tx, code, p); err != nil {
@@ -286,11 +297,11 @@ func (s *Store) mutate(ctx context.Context, code string, touch bool, fn func(tx 
 		return err
 	}
 	if touch {
-		_, err = tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, idle_timeouts=?, version=version+1, updated_at=? WHERE code=?`,
-			string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, rm.IdleTimeouts, now(), code)
+		_, err = tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, idle_timeouts=?, public=?, version=version+1, updated_at=? WHERE code=?`,
+			string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, rm.IdleTimeouts, boolToInt(rm.Public), now(), code)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, idle_timeouts=?, version=version+1 WHERE code=?`,
-			string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, rm.IdleTimeouts, code)
+		_, err = tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, idle_timeouts=?, public=?, version=version+1 WHERE code=?`,
+			string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, rm.IdleTimeouts, boolToInt(rm.Public), code)
 	}
 	if err != nil {
 		return err
@@ -501,6 +512,49 @@ func (s *Store) DeleteIdleRooms(ctx context.Context, maxIdle time.Duration) (int
 	}
 	n, _ := res.RowsAffected()
 	return n, tx.Commit()
+}
+
+// LobbyRoom is a summary of an active public room for the home page lobby.
+type LobbyRoom struct {
+	Code       string
+	Round      int
+	Game       *Game
+	UpdatedAt  int64
+	EmberCount int
+	TideCount  int
+}
+
+// ListPublicRooms returns up to limit public rooms updated at or after since
+// (unix seconds), ordered by most recent activity first.
+func (s *Store) ListPublicRooms(ctx context.Context, since int64, limit int) ([]LobbyRoom, error) {
+	rows, err := s.r.QueryContext(ctx, `
+		SELECT r.code, r.round, r.game, r.updated_at,
+		       COALESCE(SUM(CASE WHEN p.team = 'ember' THEN 1 ELSE 0 END), 0),
+		       COALESCE(SUM(CASE WHEN p.team = 'tide' THEN 1 ELSE 0 END), 0)
+		FROM rooms r
+		LEFT JOIN players p ON p.room = r.code
+		WHERE r.public = 1 AND r.updated_at >= ?
+		GROUP BY r.code
+		ORDER BY r.updated_at DESC, r.code ASC
+		LIMIT ?`, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LobbyRoom
+	for rows.Next() {
+		var lr LobbyRoom
+		var blob string
+		if err := rows.Scan(&lr.Code, &lr.Round, &blob, &lr.UpdatedAt, &lr.EmberCount, &lr.TideCount); err != nil {
+			return nil, err
+		}
+		lr.Game = new(Game)
+		if err := json.Unmarshal([]byte(blob), lr.Game); err != nil {
+			return nil, fmt.Errorf("decode game %s: %w", lr.Code, err)
+		}
+		out = append(out, lr)
+	}
+	return out, rows.Err()
 }
 
 func isUniqueViolation(err error) bool {

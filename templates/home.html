@@ -8,6 +8,10 @@
     <form method="post" class="gate-form">
       <label for="nickname">Codename (your nickname)</label>
       <input id="nickname" name="nickname" value="{{.Nick}}" maxlength="20" required autocomplete="nickname" placeholder="e.g. Fox">
+      <label class="check-row" for="public">
+        <input id="public" type="checkbox" name="public" value="1">
+        <span>List in public lobby</span>
+      </label>
       <button class="btn primary" type="submit" formaction="/create">Create room</button>
       <div class="or"><span>or join a room</span></div>
       <label for="code">Room code</label>
@@ -15,5 +19,11 @@
       <button class="btn" type="submit" formaction="/join">Join</button>
     </form>
   </div>
+  <section class="lobby-panel" aria-label="Open rooms">
+    <h2>Open rooms</h2>
+    <div id="lobby-list" hx-get="/lobby" hx-trigger="load, every 5s" hx-swap="innerHTML">
+      <p class="lobby-empty">Loading open rooms…</p>
+    </div>
+  </section>
 </main>
 {{template "foot" .}}

@@ -12,7 +12,8 @@
     toastTimer = setTimeout(clearToast, 3500);
   }
   function isStateReq(e) {
-    return (((e.detail && e.detail.pathInfo) || {}).requestPath || '').indexOf('/state') >= 0;
+    var path = ((e.detail && e.detail.pathInfo) || {}).requestPath || '';
+    return path.indexOf('/state') >= 0 || path === '/lobby';
   }
 
   // ---------- sound & mute ----------
@@ -252,13 +253,20 @@
 
     if (!document.querySelector('.overlay')) delete document.documentElement.dataset.ovx;
 
-    // Sync series score in header
+    // Sync series score and visibility tag in header
     var g = document.getElementById('game');
     if (g) {
       var ew = document.querySelector('#series-score [data-wins="ember"]');
       var tw = document.querySelector('#series-score [data-wins="tide"]');
       if (ew && g.dataset.emberWins != null) ew.textContent = g.dataset.emberWins;
       if (tw && g.dataset.tideWins != null) tw.textContent = g.dataset.tideWins;
+      var vis = document.getElementById('room-vis');
+      if (vis && g.dataset.public != null) {
+        var isPub = g.dataset.public === '1';
+        vis.textContent = isPub ? 'PUBLIC' : 'PRIVATE';
+        vis.classList.toggle('vis-public', isPub);
+        vis.classList.toggle('vis-private', !isPub);
+      }
     }
 
     // Restore settings panel open state

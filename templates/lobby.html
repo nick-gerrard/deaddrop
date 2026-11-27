@@ -1,0 +1,12 @@
+{{define "lobby"}}{{if .Rooms}}<ul class="lobby-rows">{{range .Rooms}}<li class="lobby-row">
+  <div class="lobby-info">
+    <div class="lobby-top">
+      <span class="lobby-code">{{.Code}}</span>
+      <span class="lobby-counts"><span class="s-ember">EMBER {{.EmberCount}}</span> <span class="sep">/</span> <span class="s-tide">TIDE {{.TideCount}}</span></span>
+    </div>
+    <div class="lobby-meta">
+      <span>{{.Status}}</span><span aria-hidden="true">·</span><span>{{.Ago}}</span>
+    </div>
+  </div>
+  <a class="btn small primary lobby-join" href="/r/{{.Code}}">Join</a>
+</li>{{end}}</ul>{{else}}<p class="lobby-empty">No public rooms right now. Create one and tick List in public lobby.</p>{{end}}{{end}}

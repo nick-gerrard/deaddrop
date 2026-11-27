@@ -196,6 +196,27 @@ func (a *App) doSettings(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, 
 		rm.Pack, rm.Custom = pack, custom
 	}
 
+	if vals, ok := r.PostForm["public"]; ok {
+		pub := false
+		for _, v := range vals {
+			switch v {
+			case "1", "true", "on":
+				pub = true
+			case "0", "false", "":
+			default:
+				return badRequest("Invalid lobby visibility")
+			}
+		}
+		if pub != rm.Public {
+			rm.Public = pub
+			if pub {
+				changes = append(changes, "room listed in public lobby")
+			} else {
+				changes = append(changes, "room set to private")
+			}
+		}
+	}
+
 	if len(changes) == 0 {
 		return errNoChange
 	}

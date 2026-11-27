@@ -120,6 +120,8 @@ type RoomView struct {
 	EmberWins int
 	TideWins  int
 
+	Public bool
+
 	// Round recap (populated when Over is true)
 	Recap [2]TeamRecap
 }
@@ -230,6 +232,7 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		CustomWords: s.Room.Custom,
 		EmberWins:   s.Room.EmberWins,
 		TideWins:    s.Room.TideWins,
+		Public:      s.Room.Public,
 	}
 	if !g.Over() && s.Room.Deadline > 0 {
 		v.Deadline = s.Room.Deadline
@@ -376,6 +379,53 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		case myTeam == g.Turn && me.IsHandler():
 			v.Hint = "Your operatives are guessing."
 		}
+	}
+	return v
+}
+
+type LobbyItemView struct {
+	Code       string
+	EmberCount int
+	TideCount  int
+	Status     string
+	Ago        string
+}
+
+type LobbyView struct {
+	Rooms []LobbyItemView
+}
+
+func lobbyStatus(round int, g *Game) string {
+	if g.Over() {
+		return fmt.Sprintf("Round %d finished", round)
+	}
+	if g.InProgress() || round > 1 {
+		return fmt.Sprintf("In progress round %d", round)
+	}
+	return "Waiting for players"
+}
+
+func formatAgo(nowSec, updatedSec int64) string {
+	d := nowSec - updatedSec
+	if d < 10 {
+		return "just now"
+	}
+	if d < 60 {
+		return fmt.Sprintf("%ds ago", d)
+	}
+	return fmt.Sprintf("%dm ago", d/60)
+}
+
+func buildLobbyView(rooms []LobbyRoom, nowSec int64) LobbyView {
+	v := LobbyView{Rooms: make([]LobbyItemView, 0, len(rooms))}
+	for _, r := range rooms {
+		v.Rooms = append(v.Rooms, LobbyItemView{
+			Code:       r.Code,
+			EmberCount: r.EmberCount,
+			TideCount:  r.TideCount,
+			Status:     lobbyStatus(r.Round, r.Game),
+			Ago:        formatAgo(nowSec, r.UpdatedAt),
+		})
 	}
 	return v
 }
