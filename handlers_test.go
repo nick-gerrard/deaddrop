@@ -96,7 +96,7 @@ func TestServerEnforcesRules(t *testing.T) {
 		t.Fatalf("healthz = %d %q", code, body)
 	}
 
-	a, b := newClient(t, h), newClient(t, h)
+	a, b, th, top := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
 	code, loc := a.post("/create", url.Values{"nickname": {"Alice"}})
 	if code != http.StatusSeeOther || !strings.HasPrefix(loc, "/r/") {
 		t.Fatalf("create = %d %q", code, loc)
@@ -111,51 +111,74 @@ func TestServerEnforcesRules(t *testing.T) {
 	if code, _ := b.post("/join", url.Values{"nickname": {"Bob"}, "code": {"ZZZZ"}}); code != http.StatusNotFound {
 		t.Fatalf("join missing room = %d", code)
 	}
+	th.post("/join", url.Values{"nickname": {"Carol"}, "code": {room}})
+	top.post("/join", url.Values{"nickname": {"Dave"}, "code": {room}})
 
-	snap, err := store.Snapshot(context.Background(), room)
-	if err != nil {
-		t.Fatal(err)
-	}
-	team := string(snap.Room.Game.Turn)
-	other := string(snap.Room.Game.Turn.Other())
 	base := "/r/" + room
 
-	if code, _ := a.post(base+"/team", url.Values{"team": {team}, "role": {"handler"}}); code != 200 {
+	if code, _ := a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}}); code != 200 {
 		t.Fatalf("A team = %d", code)
 	}
-	if code, _ := b.post(base+"/team", url.Values{"team": {team}, "role": {"operative"}}); code != 200 {
+	if code, _ := b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}}); code != 200 {
 		t.Fatalf("B team = %d", code)
+	}
+	if code, _ := th.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}}); code != 200 {
+		t.Fatalf("Carol team = %d", code)
+	}
+	if code, _ := top.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}}); code != 200 {
+		t.Fatalf("Dave team = %d", code)
 	}
 	if code, _ := b.post(base+"/team", url.Values{"team": {"purple"}, "role": {"operative"}}); code != 400 {
 		t.Errorf("bad team = %d, want 400", code)
 	}
 
+	// Start the mission (deals board and sets phase=playing).
+	if code, body := a.post(base+"/start", nil); code != 200 {
+		t.Fatalf("start = %d %q", code, body)
+	}
+
+	snap, err := store.Snapshot(context.Background(), room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pick active team's handler & operative and enemy operative.
+	activeH, activeOp, enemyOp := a, b, top
+	if snap.Room.Game.Turn == Tide {
+		activeH, activeOp, enemyOp = th, top, b
+	}
+
 	// No clue yet: operatives cannot guess; operatives cannot clue.
-	if code, _ := b.post(base+"/reveal", url.Values{"card": {"0"}}); code != 409 {
+	if code, _ := activeOp.post(base+"/reveal", url.Values{"card": {"0"}}); code != 409 {
 		t.Errorf("guess before clue = %d, want 409", code)
 	}
-	if code, _ := b.post(base+"/clue", url.Values{"clue": {"river"}, "number": {"2"}}); code != 403 {
+	if code, _ := activeOp.post(base+"/clue", url.Values{"clue": {"river"}, "number": {"2"}}); code != 403 {
 		t.Errorf("operative clue = %d, want 403", code)
 	}
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {"two words"}, "number": {"2"}}); code != 400 {
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {"two words"}, "number": {"2"}}); code != 400 {
 		t.Errorf("bad clue = %d, want 400", code)
 	}
 	onBoard := snap.Room.Game.Cards[0].Word
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {strings.ToUpper(onBoard)}, "number": {"2"}}); code != 400 {
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {strings.ToUpper(onBoard)}, "number": {"2"}}); code != 400 {
 		t.Errorf("board-word clue = %d, want 400", code)
 	}
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"12"}}); code != 400 {
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"0"}}); code != 400 {
+		t.Errorf("zero number = %d, want 400", code)
+	}
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {""}}); code != 400 {
+		t.Errorf("empty number = %d, want 400", code)
+	}
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"12"}}); code != 400 {
 		t.Errorf("bad number = %d, want 400", code)
 	}
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"2"}}); code != 200 {
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"2"}}); code != 200 {
 		t.Fatalf("handler clue = %d", code)
 	}
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {"again"}, "number": {"2"}}); code != 409 {
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {"again"}, "number": {"2"}}); code != 409 {
 		t.Errorf("second clue = %d, want 409", code)
 	}
 
 	// Handler can't guess; spectator can't guess; enemy operative can't guess.
-	if code, _ := a.post(base+"/reveal", url.Values{"card": {"0"}}); code != 403 {
+	if code, _ := activeH.post(base+"/reveal", url.Values{"card": {"0"}}); code != 403 {
 		t.Errorf("handler reveal = %d, want 403", code)
 	}
 	spec := newClient(t, h)
@@ -163,16 +186,13 @@ func TestServerEnforcesRules(t *testing.T) {
 	if code, _ := spec.post(base+"/reveal", url.Values{"card": {"0"}}); code != 403 {
 		t.Errorf("spectator reveal = %d, want 403", code)
 	}
-	enemy := newClient(t, h)
-	enemy.post("/join", url.Values{"nickname": {"Eve"}, "code": {room}})
-	enemy.post(base+"/team", url.Values{"team": {other}, "role": {"operative"}})
-	if code, _ := enemy.post(base+"/reveal", url.Values{"card": {"0"}}); code != 403 {
+	if code, _ := enemyOp.post(base+"/reveal", url.Values{"card": {"0"}}); code != 403 {
 		t.Errorf("enemy reveal = %d, want 403", code)
 	}
-	if code, _ := enemy.post(base+"/end", nil); code != 403 {
+	if code, _ := enemyOp.post(base+"/end", nil); code != 403 {
 		t.Errorf("enemy end turn = %d, want 403", code)
 	}
-	if code, _ := b.post(base+"/end", nil); code != 409 {
+	if code, _ := activeOp.post(base+"/end", nil); code != 409 {
 		t.Errorf("end turn without guess = %d, want 409", code)
 	}
 	if code, _ := newClient(t, h).post(base+"/reveal", url.Values{"card": {"0"}}); code != 403 {
@@ -180,8 +200,8 @@ func TestServerEnforcesRules(t *testing.T) {
 	}
 
 	// Per-viewer rendering: only handlers see unrevealed colours.
-	_, ha := a.get(base + "/state?v=0")
-	_, ob := b.get(base + "/state?v=0")
+	_, ha := activeH.get(base + "/state?v=0")
+	_, ob := activeOp.get(base + "/state?v=0")
 	if !strings.Contains(ha, " k-") {
 		t.Error("handler view is missing the key")
 	}
@@ -194,39 +214,37 @@ func TestServerEnforcesRules(t *testing.T) {
 	if m == nil {
 		t.Fatal("no version in fragment")
 	}
-	for name, c := range map[string]*client{"A": a, "B": b} {
+	for name, c := range map[string]*client{"H": activeH, "Op": activeOp} {
 		if code, _ := c.get(base + "/state?v=" + m[1]); code != http.StatusNoContent {
 			t.Errorf("%s unchanged poll = %d, want 204", name, code)
 		}
 	}
-	if code, _ := b.post(base+"/reveal", url.Values{"card": {"0"}}); code != 200 {
+	if code, _ := activeOp.post(base+"/reveal", url.Values{"card": {"0"}}); code != 200 {
 		t.Fatalf("operative reveal = %d", code)
 	}
-	if code, _ := b.post(base+"/reveal", url.Values{"card": {"0"}}); code != 409 && code != 403 {
+	if code, _ := activeOp.post(base+"/reveal", url.Values{"card": {"0"}}); code != 409 && code != 403 {
 		t.Errorf("repeat reveal = %d, want 409 (or 403 if the turn passed)", code)
 	}
-	for name, c := range map[string]*client{"A": a, "B": b} {
+	for name, c := range map[string]*client{"H": activeH, "Op": activeOp} {
 		code, body := c.get(base + "/state?v=" + m[1])
 		if code != 200 || !strings.Contains(body, "revealed") || !strings.Contains(body, strings.ToUpper(onBoard)) {
 			t.Errorf("%s did not see the reveal: %d", name, code)
 		}
 	}
 
-	// Spectators cannot deal a new round; team members can; board resets.
+	// Mid-round: /new is refused (409); /abort returns to setup (keeping teams).
 	if code, _ := spec.post(base+"/new", nil); code != http.StatusForbidden {
 		t.Errorf("spectator new round = %d, want 403", code)
 	}
-	if code, _ := b.post(base+"/new", nil); code != 200 {
-		t.Errorf("team member new round = %d", code)
+	if code, _ := activeOp.post(base+"/new", nil); code != http.StatusConflict {
+		t.Errorf("team member mid-round /new = %d, want 409", code)
+	}
+	if code, _ := activeOp.post(base+"/abort", nil); code != 200 {
+		t.Errorf("team member abort = %d, want 200", code)
 	}
 	snap, _ = store.Snapshot(context.Background(), room)
-	if snap.Room.Round != 2 || snap.Room.Game.HasClue || len(snap.Players) != 4 {
-		t.Errorf("after new round: round=%d hasClue=%v players=%d", snap.Room.Round, snap.Room.Game.HasClue, len(snap.Players))
-	}
-	for _, c := range snap.Room.Game.Cards {
-		if c.Revealed {
-			t.Error("card still revealed after new round")
-		}
+	if snap.Room.Phase != PhaseSetup || len(snap.Players) != 5 {
+		t.Errorf("after abort: phase=%q players=%d", snap.Room.Phase, len(snap.Players))
 	}
 }
 
@@ -244,87 +262,165 @@ func newTestApp(t *testing.T) (*Store, *App, http.Handler) {
 	return store, app, app.Routes()
 }
 
-func TestHandlerRoleRules(t *testing.T) {
+func TestSetupPhaseAndRoleLocks(t *testing.T) {
 	store, _, h := newTestApp(t)
-	a, b, c, d := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
-	_, loc := a.post("/create", url.Values{"nickname": {"A"}})
+	a, b, c, d, spec := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
+	_, loc := a.post("/create", url.Values{"nickname": {"Alice"}})
 	room := strings.TrimPrefix(loc, "/r/")
 	base := "/r/" + room
-	for name, cl := range map[string]*client{"B": b, "C": c, "D": d} {
+	for name, cl := range map[string]*client{"Bob": b, "Carol": c, "Dave": d, "Spec": spec} {
 		if code, _ := cl.post("/join", url.Values{"nickname": {name}, "code": {room}}); code != http.StatusSeeOther {
 			t.Fatalf("join %s = %d", name, code)
 		}
 	}
+
+	// New room starts in setup; view contains NO board words even for handlers.
 	snap, _ := store.Snapshot(context.Background(), room)
-	team := string(snap.Room.Game.Turn)
-	other := string(snap.Room.Game.Turn.Other())
-
-	// Max 2 handlers per team even before round starts.
-	if code, _ := a.post(base+"/team", url.Values{"team": {team}, "role": {"handler"}}); code != 200 {
-		t.Fatalf("1st handler = %d", code)
+	if snap.Room.Phase != PhaseSetup {
+		t.Fatalf("initial phase = %q, want %q", snap.Room.Phase, PhaseSetup)
 	}
-	if code, _ := b.post(base+"/team", url.Values{"team": {team}, "role": {"handler"}}); code != 200 {
-		t.Fatalf("2nd handler = %d", code)
+	// Max 1 handler per team in setup.
+	if code, _ := a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}}); code != 200 {
+		t.Fatalf("1st ember handler = %d", code)
 	}
-	if code, _ := c.post(base+"/team", url.Values{"team": {team}, "role": {"handler"}}); code != http.StatusConflict {
-		t.Fatalf("3rd handler = %d, want 409", code)
+	if code, _ := b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}}); code != http.StatusConflict {
+		t.Fatalf("2nd ember handler = %d, want 409", code)
 	}
-	// B switches away from handler -> allowed.
-	if code, _ := b.post(base+"/team", url.Values{"team": {team}, "role": {"operative"}}); code != 200 {
-		t.Fatalf("switch away from handler = %d", code)
+	// Setup view must not contain any board words or key classes.
+	_, setupHTML := a.get(base + "/state?v=0")
+	if strings.Contains(setupHTML, `class="board`) || strings.Contains(setupHTML, "k-ember") {
+		t.Errorf("setup view rendered board or key")
 	}
-
-	// Start round by giving a clue.
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"1"}}); code != 200 {
-		t.Fatalf("clue = %d", code)
+	for _, card := range snap.Room.Game.Cards {
+		if strings.Contains(setupHTML, ">"+card.Word+"<") {
+			t.Errorf("setup view leaked board word %q", card.Word)
+		}
 	}
 
-	// Mid-round: team already has handler A, so B cannot become handler (409 + toast message).
-	code, body := b.post(base+"/team", url.Values{"team": {team}, "role": {"handler"}})
-	if code != http.StatusConflict || !strings.Contains(body, "Can't become handler mid-round") {
-		t.Fatalf("mid-round handler = %d %q, want 409 with message", code, body)
+	// Start refused without operatives/handlers.
+	if code, body := a.post(base+"/start", nil); code != http.StatusConflict || !strings.Contains(body, "EMBER needs an operative") {
+		t.Fatalf("start without ember op = %d %q, want 409", code, body)
+	}
+	b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	if code, body := a.post(base+"/start", nil); code != http.StatusConflict || !strings.Contains(body, "TIDE needs a Handler") {
+		t.Fatalf("start without tide handler = %d %q, want 409", code, body)
+	}
+	c.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+	if code, body := a.post(base+"/start", nil); code != http.StatusConflict || !strings.Contains(body, "TIDE needs an operative") {
+		t.Fatalf("start without tide op = %d %q, want 409", code, body)
+	}
+	d.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}})
+
+	// Spectator cannot start.
+	if code, _ := spec.post(base+"/start", nil); code != http.StatusForbidden {
+		t.Fatalf("spectator start = %d, want 403", code)
 	}
 
-	// Mid-round: other team has NO handler, so C CAN become handler on other team.
-	if code, _ := c.post(base+"/team", url.Values{"team": {other}, "role": {"handler"}}); code != 200 {
-		t.Fatalf("mid-round handler when team has none = %d, want 200", code)
+	// Valid start deals board and enters playing phase.
+	if code, body := a.post(base+"/start", nil); code != 200 {
+		t.Fatalf("start = %d %q", code, body)
 	}
-	// Now other team has 1 handler, so D cannot become handler mid-round.
-	if code, _ := d.post(base+"/team", url.Values{"team": {other}, "role": {"handler"}}); code != http.StatusConflict {
-		t.Fatalf("2nd mid-round handler on other = %d, want 409", code)
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Phase != PhasePlaying {
+		t.Fatalf("phase after start = %q, want %q", snap.Room.Phase, PhasePlaying)
 	}
 
-	// Switching away from handler mid-round is always allowed.
-	if code, _ := a.post(base+"/team", url.Values{"team": {"none"}, "role": {"operative"}}); code != 200 {
-		t.Fatalf("handler -> spectate mid-round = %d, want 200", code)
+	// While playing: team members cannot switch roles or teams (409).
+	if code, _ := b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}}); code != http.StatusConflict {
+		t.Errorf("operative -> handler while playing = %d, want 409", code)
 	}
-	// Now team has no handler again, so B can step in.
-	if code, _ := b.post(base+"/team", url.Values{"team": {team}, "role": {"handler"}}); code != 200 {
-		t.Fatalf("replacement handler mid-round = %d, want 200", code)
+	if code, _ := a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}}); code != http.StatusConflict {
+		t.Errorf("handler -> operative while playing = %d, want 409", code)
+	}
+	if code, _ := b.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}}); code != http.StatusConflict {
+		t.Errorf("operative switch team while playing = %d, want 409", code)
+	}
+	if code, _ := a.post(base+"/team", url.Values{"team": {"none"}, "role": {"operative"}}); code != http.StatusConflict {
+		t.Errorf("handler -> spectate while playing = %d, want 409", code)
+	}
+
+	// While playing: spectator -> handler is 409; spectator -> operative is 200.
+	if code, _ := spec.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}}); code != http.StatusConflict {
+		t.Errorf("spectator -> handler while playing = %d, want 409", code)
+	}
+	if code, _ := spec.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}}); code != 200 {
+		t.Errorf("spectator -> operative while playing = %d, want 200", code)
+	}
+
+	// While playing: settings (timer/pack) refused with 409, public toggle allowed.
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}}); code != http.StatusConflict {
+		t.Errorf("timer change while playing = %d, want 409", code)
+	}
+	if code, _ := a.post(base+"/settings", url.Values{"pack": {"hard"}}); code != http.StatusConflict {
+		t.Errorf("pack change while playing = %d, want 409", code)
+	}
+	if code, _ := a.post(base+"/settings", url.Values{"public": {"1"}}); code != 200 {
+		t.Errorf("public toggle while playing = %d, want 200", code)
+	}
+
+	// Finish game, then Next round -> returns to setup, increments round, keeps teams & roles & series score.
+	if err := store.Mutate(context.Background(), room, func(tx *sql.Tx, rm *Room) error {
+		rm.Game.Winner = Ember
+		rm.Game.EndReason = "test"
+		rm.EmberWins = 1
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := a.post(base+"/new", nil); code != 200 {
+		t.Fatalf("next round after win = %d, want 200", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Phase != PhaseSetup || snap.Room.Round != 2 || snap.Room.EmberWins != 1 {
+		t.Fatalf("after next round: phase=%q round=%d emberWins=%d", snap.Room.Phase, snap.Room.Round, snap.Room.EmberWins)
+	}
+	roles := map[string]string{}
+	for _, p := range snap.Players {
+		roles[p.Nickname] = p.Team + ":" + p.Role
+	}
+	if roles["Alice"] != "ember:handler" || roles["Bob"] != "ember:operative" || roles["Carol"] != "tide:handler" || roles["Dave"] != "tide:operative" || roles["Spec"] != "ember:operative" {
+		t.Errorf("teams/roles not preserved after next round: %v", roles)
 	}
 }
 
 func TestNewRoundPermissions(t *testing.T) {
 	store, _, h := newTestApp(t)
-	a, spec, outsider := newClient(t, h), newClient(t, h), newClient(t, h)
+	a, b, c, d, spec, outsider := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
 	_, loc := a.post("/create", url.Values{"nickname": {"A"}})
 	room := strings.TrimPrefix(loc, "/r/")
 	base := "/r/" + room
-	spec.post("/join", url.Values{"nickname": {"Spec"}, "code": {room}})
+	for name, cl := range map[string]*client{"B": b, "C": c, "D": d, "Spec": spec} {
+		cl.post("/join", url.Values{"nickname": {name}, "code": {room}})
+	}
+	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
+	b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	c.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+	d.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}})
+	if code, _ := a.post(base+"/start", nil); code != 200 {
+		t.Fatalf("start = %d", code)
+	}
 
-	// Mid-round: outsider and spectator rejected; team member allowed.
+	// Mid-round: outsider and spectator rejected; team member /new -> 409, /abort -> 200.
 	if code, _ := outsider.post(base+"/new", nil); code != http.StatusForbidden {
 		t.Errorf("outsider new round = %d, want 403", code)
 	}
 	if code, _ := spec.post(base+"/new", nil); code != http.StatusForbidden {
 		t.Errorf("spectator mid-round new = %d, want 403", code)
 	}
-	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
-	if code, _ := a.post(base+"/new", nil); code != 200 {
-		t.Errorf("team member mid-round new = %d, want 200", code)
+	if code, _ := a.post(base+"/new", nil); code != http.StatusConflict {
+		t.Errorf("team member mid-round new = %d, want 409", code)
+	}
+	if code, _ := spec.post(base+"/abort", nil); code != http.StatusForbidden {
+		t.Errorf("spectator abort = %d, want 403", code)
+	}
+	if code, _ := a.post(base+"/abort", nil); code != 200 {
+		t.Errorf("team member abort = %d, want 200", code)
 	}
 
-	// Game over: spectator still gets 403; team member allowed.
+	// Start again and finish game: spectator still gets 403; team member /new -> 200.
+	if code, _ := a.post(base+"/start", nil); code != 200 {
+		t.Fatalf("restart = %d", code)
+	}
 	err := store.Mutate(context.Background(), room, func(tx *sql.Tx, rm *Room) error {
 		rm.Game.Winner = Ember
 		rm.Game.EndReason = "test"

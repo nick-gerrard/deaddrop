@@ -129,7 +129,7 @@ func TestSubmitClue(t *testing.T) {
 		wantErr error
 	}{
 		{"ok", Ember, "sea", 2, nil, nil},
-		{"ok zero", Ember, "sea", 0, nil, nil},
+		{"number zero", Ember, "sea", 0, nil, ErrBadClue},
 		{"wrong team", Tide, "sea", 2, nil, ErrNotYourTurn},
 		{"already clued", Ember, "sea", 2, func(g *Game) { g.HasClue = true }, ErrHasClue},
 		{"game over", Ember, "sea", 2, func(g *Game) { g.Winner = Tide }, ErrGameOver},
@@ -227,14 +227,12 @@ func TestGuessLimit(t *testing.T) {
 		number     int
 		correct    int // consecutive own-colour guesses to make
 		wantTurn   Team
-		wantUnlim  bool
 		wantGuesss int
 	}{
-		{"number 1 allows 2 guesses, still ours after 1", 1, 1, Ember, false, 1},
-		{"number 1 turn ends after 2", 1, 2, Tide, false, 0},
-		{"number 2 still ours after 2", 2, 2, Ember, false, 2},
-		{"number 2 ends after 3", 2, 3, Tide, false, 0},
-		{"zero is unlimited", 0, 8, Ember, true, 8},
+		{"number 1 allows 2 guesses, still ours after 1", 1, 1, Ember, 1},
+		{"number 1 turn ends after 2", 1, 2, Tide, 0},
+		{"number 2 still ours after 2", 2, 2, Ember, 2},
+		{"number 2 ends after 3", 2, 3, Tide, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,9 +249,8 @@ func TestGuessLimit(t *testing.T) {
 				t.Errorf("turn=%s guesses=%d, want %s/%d", g.Turn, g.Guesses, tc.wantTurn, tc.wantGuesss)
 			}
 			if tc.wantTurn == Ember {
-				left, unlim := g.GuessesLeft()
-				if unlim != tc.wantUnlim || (!unlim && left != tc.number+1-tc.correct) {
-					t.Errorf("GuessesLeft = %d,%v", left, unlim)
+				if left := g.GuessesLeft(); left != tc.number+1-tc.correct {
+					t.Errorf("GuessesLeft = %d, want %d", left, tc.number+1-tc.correct)
 				}
 			}
 		})

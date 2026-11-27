@@ -148,6 +148,12 @@ func (a *App) doSettings(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, 
 	if me.Team == "none" {
 		return forbidden("Join a team to change mission settings")
 	}
+	_, hasCustom := r.PostForm["custom"]
+	if rm.Phase == PhasePlaying {
+		if r.PostFormValue("timer") != "" || r.PostFormValue("pack") != "" || hasCustom {
+			return &httpError{http.StatusConflict, "Settings are locked during a mission"}
+		}
+	}
 	var changes []string
 
 	if v := r.PostFormValue("timer"); v != "" {
@@ -175,7 +181,7 @@ func (a *App) doSettings(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, 
 			return badRequest("Pick a word pack from the list")
 		}
 		custom := rm.Custom
-		if _, given := r.PostForm["custom"]; given {
+		if hasCustom {
 			raw := r.PostFormValue("custom")
 			words, err := parseCustomWords(raw)
 			switch {
@@ -191,7 +197,7 @@ func (a *App) doSettings(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, 
 			}
 		}
 		if pack != rm.Pack || (pack == PackCustom && custom != rm.Custom) {
-			changes = append(changes, "word pack "+packLabel(pack)+" (from the next round)")
+			changes = append(changes, "word pack "+packLabel(pack))
 		}
 		rm.Pack, rm.Custom = pack, custom
 	}
@@ -237,6 +243,9 @@ func (a *App) doSeriesReset(ctx context.Context, tx *sql.Tx, rm *Room, me *Playe
 // doMark toggles the caller's suggestion mark on an unrevealed card. Only
 // operatives on the guessing team may mark.
 func (a *App) doMark(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	if rm.Phase != PhasePlaying {
+		return &httpError{http.StatusConflict, "Mission hasn't started yet"}
+	}
 	g := rm.Game
 	if me.Team == "none" || me.IsHandler() {
 		return forbidden("Only operatives on the guessing team can mark cards")
@@ -264,9 +273,9 @@ func (a *App) doMark(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 // ---------- turn timer ----------
 
 // restartTimer (re)starts the turn deadline for the room's current phase, or
-// clears it when the timer is off or the round is over.
+// clears it when the timer is off, in setup, or the round is over.
 func (a *App) restartTimer(rm *Room) {
-	if rm.TimerSecs <= 0 || rm.Game.Over() {
+	if rm.Phase != PhasePlaying || rm.TimerSecs <= 0 || rm.Game.Over() {
 		rm.Deadline = 0
 		return
 	}
@@ -275,6 +284,7 @@ func (a *App) restartTimer(rm *Room) {
 }
 
 type turnKey struct {
+	phase   string
 	round   int
 	turn    Team
 	hasClue bool
@@ -282,7 +292,7 @@ type turnKey struct {
 }
 
 func keyOf(rm *Room) turnKey {
-	return turnKey{rm.Round, rm.Game.Turn, rm.Game.HasClue, rm.Game.Over()}
+	return turnKey{rm.Phase, rm.Round, rm.Game.Turn, rm.Game.HasClue, rm.Game.Over()}
 }
 
 // afterAction runs inside the action's transaction. Whenever the turn phase
@@ -304,7 +314,7 @@ func (a *App) expireTurn(ctx context.Context, code string) {
 		return
 	}
 	err = a.store.MutateNoTouch(ctx, code, func(tx *sql.Tx, rm *Room) error {
-		if rm.Deadline == 0 || a.nowMs() <= rm.Deadline || rm.Game.Over() {
+		if rm.Phase != PhasePlaying || rm.Deadline == 0 || a.nowMs() <= rm.Deadline || rm.Game.Over() {
 			return errNoChange
 		}
 		team := rm.Game.Turn

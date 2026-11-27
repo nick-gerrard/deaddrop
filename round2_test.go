@@ -69,22 +69,38 @@ func TestTimerExpiryWithInjectedClock(t *testing.T) {
 	nowT := time.Unix(1_700_000_000, 0)
 	app.now = func() time.Time { return nowT }
 
-	a, b := newClient(t, h), newClient(t, h)
+	a, b, c, d := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
 	_, loc := a.post("/create", url.Values{"nickname": {"Alice"}})
 	room := strings.TrimPrefix(loc, "/r/")
 	base := "/r/" + room
 	b.post("/join", url.Values{"nickname": {"Bob"}, "code": {room}})
+	c.post("/join", url.Values{"nickname": {"Carol"}, "code": {room}})
+	d.post("/join", url.Values{"nickname": {"Dave"}, "code": {room}})
 
-	snap, _ := store.Snapshot(context.Background(), room)
-	firstTeam := snap.Room.Game.Turn
-	a.post(base+"/team", url.Values{"team": {string(firstTeam)}, "role": {"handler"}})
-	b.post(base+"/team", url.Values{"team": {string(firstTeam)}, "role": {"operative"}})
+	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
+	b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	c.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+	d.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}})
 
-	// Enable 60s turn timer.
-	if code, body := a.post(base+"/settings", url.Values{"timer": {"60"}}); code != 200 || !strings.Contains(body, `data-deadline="`) {
+	// Enable 60s turn timer in setup (deadline stays 0 until start).
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}}); code != 200 {
 		t.Fatalf("enable timer = %d", code)
 	}
+	snap, _ := store.Snapshot(context.Background(), room)
+	if snap.Room.Deadline != 0 {
+		t.Fatalf("deadline in setup = %d, want 0", snap.Room.Deadline)
+	}
+
+	// Start mission: deadline starts now.
+	if code, body := a.post(base+"/start", nil); code != 200 || !strings.Contains(body, `data-deadline="`) {
+		t.Fatalf("start = %d", code)
+	}
 	snap, _ = store.Snapshot(context.Background(), room)
+	firstTeam := snap.Room.Game.Turn
+	activeH, activeOp := a, b
+	if firstTeam == Tide {
+		activeH, activeOp = c, d
+	}
 	dl1 := snap.Room.Deadline
 	if dl1 != nowT.UnixMilli()+60_000 {
 		t.Fatalf("deadline = %d, want %d", dl1, nowT.UnixMilli()+60_000)
@@ -92,7 +108,7 @@ func TestTimerExpiryWithInjectedClock(t *testing.T) {
 
 	// Advance 30s and give a clue: deadline must restart for the guess phase.
 	nowT = nowT.Add(30 * time.Second)
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"2"}}); code != 200 {
+	if code, _ := activeH.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"2"}}); code != 200 {
 		t.Fatalf("clue = %d", code)
 	}
 	snap, _ = store.Snapshot(context.Background(), room)
@@ -102,7 +118,7 @@ func TestTimerExpiryWithInjectedClock(t *testing.T) {
 	}
 
 	// Place a mark before timeout to ensure timeout clears marks too.
-	if code, _ := b.post(base+"/mark", url.Values{"card": {"0"}}); code != 200 {
+	if code, _ := activeOp.post(base+"/mark", url.Values{"card": {"0"}}); code != 200 {
 		t.Fatalf("mark = %d", code)
 	}
 	snap, _ = store.Snapshot(context.Background(), room)
@@ -137,34 +153,44 @@ func TestTimerExpiryWithInjectedClock(t *testing.T) {
 
 func TestWordPackSelectionAndCustomValidation(t *testing.T) {
 	store, _, h := newTestApp(t)
-	a, spec := newClient(t, h), newClient(t, h)
+	a, b, c, d, spec := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
 	_, loc := a.post("/create", url.Values{"nickname": {"Alice"}})
 	room := strings.TrimPrefix(loc, "/r/")
 	base := "/r/" + room
-	spec.post("/join", url.Values{"nickname": {"Spec"}, "code": {room}})
-	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	for name, cl := range map[string]*client{"B": b, "C": c, "D": d, "Spec": spec} {
+		cl.post("/join", url.Values{"nickname": {name}, "code": {room}})
+	}
+	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
+	b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	c.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+	d.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}})
 
 	// Spectator cannot change settings.
 	if code, _ := spec.post(base+"/settings", url.Values{"pack": {"hard"}}); code != http.StatusForbidden {
 		t.Fatalf("spectator settings = %d, want 403", code)
 	}
 
-	// Select Hard pack; verify next round uses hardWordList.
+	// Select Hard pack in setup; start and verify hardWordList is used.
 	if code, _ := a.post(base+"/settings", url.Values{"pack": {"hard"}}); code != 200 {
 		t.Fatalf("set hard pack = %d", code)
 	}
-	if code, _ := a.post(base+"/new", nil); code != 200 {
-		t.Fatalf("new round hard = %d", code)
+	if code, _ := a.post(base+"/start", nil); code != 200 {
+		t.Fatalf("start hard = %d", code)
 	}
 	hardSet := map[string]bool{}
 	for _, w := range hardWordList {
 		hardSet[w] = true
 	}
 	snap, _ := store.Snapshot(context.Background(), room)
-	for _, c := range snap.Room.Game.Cards {
-		if !hardSet[c.Word] {
-			t.Errorf("word %q not from hardWordList", c.Word)
+	for _, card := range snap.Room.Game.Cards {
+		if !hardSet[card.Word] {
+			t.Errorf("word %q not from hardWordList", card.Word)
 		}
+	}
+
+	// Abort back to setup to test custom pack validation and selection.
+	if code, _ := a.post(base+"/abort", nil); code != 200 {
+		t.Fatalf("abort = %d", code)
 	}
 
 	// Custom pack validation errors.
@@ -197,17 +223,17 @@ func TestWordPackSelectionAndCustomValidation(t *testing.T) {
 	if code, body := a.post(base+"/settings", url.Values{"pack": {"custom"}, "custom": {strings.Join(custom25, ", ")}}); code != 200 {
 		t.Fatalf("valid custom pack = %d %q", code, body)
 	}
-	if code, _ := a.post(base+"/new", nil); code != 200 {
-		t.Fatalf("new round custom = %d", code)
+	if code, _ := a.post(base+"/start", nil); code != 200 {
+		t.Fatalf("start custom = %d", code)
 	}
 	customSet := map[string]bool{}
 	for _, w := range custom25 {
 		customSet[strings.ToLower(w)] = true
 	}
 	snap, _ = store.Snapshot(context.Background(), room)
-	for _, c := range snap.Room.Game.Cards {
-		if !customSet[c.Word] {
-			t.Errorf("word %q not from custom pack", c.Word)
+	for _, card := range snap.Room.Game.Cards {
+		if !customSet[card.Word] {
+			t.Errorf("word %q not from custom pack", card.Word)
 		}
 	}
 }
@@ -221,15 +247,16 @@ func TestScoreboardIncrementsOncePerWinAndRecap(t *testing.T) {
 	b.post("/join", url.Values{"nickname": {"Bob"}, "code": {room}})
 	spec.post("/join", url.Values{"nickname": {"Spec"}, "code": {room}})
 
-	// Install deterministic board: ember starts, idx 24 is burned.
+	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
+	b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	// Install deterministic board and enter playing phase: ember starts, idx 24 is burned.
 	if err := store.Mutate(context.Background(), room, func(tx *sql.Tx, rm *Room) error {
+		rm.Phase = PhasePlaying
 		rm.Game = fixedGame()
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
-	b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
 	a.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"2"}})
 
 	// Reveal one ember agent, then hit burned card -> Tide wins!
@@ -274,25 +301,29 @@ func TestScoreboardIncrementsOncePerWinAndRecap(t *testing.T) {
 
 func TestMarksPermissionsAndLifecycle(t *testing.T) {
 	store, _, h := newTestApp(t)
-	handler, op1, op2, enemy, spec := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
+	handler, op1, op2, enemy, enemyHandler, spec := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
 	_, loc := handler.post("/create", url.Values{"nickname": {"Hannah"}})
 	room := strings.TrimPrefix(loc, "/r/")
 	base := "/r/" + room
 	op1.post("/join", url.Values{"nickname": {"Jane Doe"}, "code": {room}})
 	op2.post("/join", url.Values{"nickname": {"Bob"}, "code": {room}})
 	enemy.post("/join", url.Values{"nickname": {"Eve"}, "code": {room}})
+	enemyHandler.post("/join", url.Values{"nickname": {"EnemyH"}, "code": {room}})
 	spec.post("/join", url.Values{"nickname": {"Spec"}, "code": {room}})
 
+	handler.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
+	op1.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	op2.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	enemy.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}})
+	enemyHandler.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+
 	if err := store.Mutate(context.Background(), room, func(tx *sql.Tx, rm *Room) error {
+		rm.Phase = PhasePlaying
 		rm.Game = fixedGame()
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	handler.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
-	op1.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
-	op2.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
-	enemy.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}})
 
 	// Before clue: operative cannot mark.
 	if code, _ := op1.post(base+"/mark", url.Values{"card": {"0"}}); code != http.StatusConflict {
@@ -335,9 +366,6 @@ func TestMarksPermissionsAndLifecycle(t *testing.T) {
 	if strings.Contains(sBody, ">JD<") || strings.Contains(sBody, ">BO<") {
 		t.Errorf("spectator should not see marking team's marks")
 	}
-	enemyHandler := newClient(t, h)
-	enemyHandler.post("/join", url.Values{"nickname": {"EnemyH"}, "code": {room}})
-	enemyHandler.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
 	_, ehBody := enemyHandler.get(base + "/state?v=0")
 	if strings.Contains(ehBody, ">JD<") || strings.Contains(ehBody, ">BO<") {
 		t.Errorf("other team handler should not see marking team's marks")
@@ -378,18 +406,30 @@ func TestSettingsTimerDeadlinePreservation(t *testing.T) {
 	nowT := time.Unix(1_700_000_000, 0)
 	app.now = func() time.Time { return nowT }
 
-	a := newClient(t, h)
+	a, b, c, d := newClient(t, h), newClient(t, h), newClient(t, h), newClient(t, h)
 	_, loc := a.post("/create", url.Values{"nickname": {"Alice"}})
 	room := strings.TrimPrefix(loc, "/r/")
 	base := "/r/" + room
+	for name, cl := range map[string]*client{"B": b, "C": c, "D": d} {
+		cl.post("/join", url.Values{"nickname": {name}, "code": {room}})
+	}
+	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
+	b.post(base+"/team", url.Values{"team": {"ember"}, "role": {"operative"}})
+	c.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+	d.post(base+"/team", url.Values{"team": {"tide"}, "role": {"operative"}})
 
-	snap, _ := store.Snapshot(context.Background(), room)
-	firstTeam := snap.Room.Game.Turn
-	a.post(base+"/team", url.Values{"team": {string(firstTeam)}, "role": {"handler"}})
-
-	// Enable 60s timer -> starts deadline.
+	// Enable 60s timer in setup -> TimerSecs saved, deadline stays 0 until start.
 	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}}); code != 200 {
 		t.Fatalf("enable timer = %d", code)
+	}
+	snap, _ := store.Snapshot(context.Background(), room)
+	if snap.Room.TimerSecs != 60 || snap.Room.Deadline != 0 {
+		t.Fatalf("setup timer = %d deadline = %d, want 60 / 0", snap.Room.TimerSecs, snap.Room.Deadline)
+	}
+
+	// Start mission -> deadline starts at now + 60s.
+	if code, _ := a.post(base+"/start", nil); code != 200 {
+		t.Fatalf("start = %d", code)
 	}
 	snap, _ = store.Snapshot(context.Background(), room)
 	origDeadline := snap.Room.Deadline
@@ -397,45 +437,38 @@ func TestSettingsTimerDeadlinePreservation(t *testing.T) {
 		t.Fatalf("origDeadline = %d, want %d", origDeadline, nowT.UnixMilli()+60_000)
 	}
 
-	// Advance 20s and re-save settings (change pack, same timer): deadline must not move.
+	// While playing, toggling public lobby does NOT move the running deadline.
 	nowT = nowT.Add(20 * time.Second)
-	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}, "pack": {"hard"}}); code != 200 {
-		t.Fatalf("resave settings = %d", code)
+	if code, _ := a.post(base+"/settings", url.Values{"public": {"1"}}); code != 200 {
+		t.Fatalf("toggle public while playing = %d", code)
 	}
 	snap, _ = store.Snapshot(context.Background(), room)
 	if snap.Room.Deadline != origDeadline {
-		t.Fatalf("resaving settings moved deadline: got %d, want %d", snap.Room.Deadline, origDeadline)
+		t.Fatalf("toggling public moved deadline: got %d, want %d", snap.Room.Deadline, origDeadline)
 	}
 
-	// Change timer duration from 60s to 120s: current turn deadline stays as is.
-	nowT = nowT.Add(10 * time.Second)
-	if code, _ := a.post(base+"/settings", url.Values{"timer": {"120"}}); code != 200 {
-		t.Fatalf("change timer = %d", code)
+	// While playing, changing timer or pack is refused with 409.
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"120"}}); code != http.StatusConflict {
+		t.Fatalf("change timer while playing = %d, want 409", code)
 	}
-	snap, _ = store.Snapshot(context.Background(), room)
-	if snap.Room.Deadline != origDeadline {
-		t.Fatalf("changing duration restarted running deadline: got %d, want %d", snap.Room.Deadline, origDeadline)
-	}
-	if snap.Room.TimerSecs != 120 {
-		t.Fatalf("TimerSecs = %d, want 120", snap.Room.TimerSecs)
+	if code, _ := a.post(base+"/settings", url.Values{"pack": {"hard"}}); code != http.StatusConflict {
+		t.Fatalf("change pack while playing = %d, want 409", code)
 	}
 
-	// Next turn phase (giving a clue) uses the new 120s duration.
-	if code, _ := a.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"1"}}); code != 200 {
-		t.Fatalf("clue = %d", code)
-	}
-	snap, _ = store.Snapshot(context.Background(), room)
-	if snap.Room.Deadline != nowT.UnixMilli()+120_000 {
-		t.Fatalf("next turn deadline = %d, want %d", snap.Room.Deadline, nowT.UnixMilli()+120_000)
-	}
-
-	// Turning timer off clears the deadline immediately.
-	if code, _ := a.post(base+"/settings", url.Values{"timer": {"0"}}); code != 200 {
-		t.Fatalf("disable timer = %d", code)
+	// Abort back to setup clears deadline and allows disabling timer.
+	if code, _ := a.post(base+"/abort", nil); code != 200 {
+		t.Fatalf("abort = %d", code)
 	}
 	snap, _ = store.Snapshot(context.Background(), room)
 	if snap.Room.Deadline != 0 {
-		t.Fatalf("turning timer off did not clear deadline: got %d", snap.Room.Deadline)
+		t.Fatalf("abort did not clear deadline: got %d", snap.Room.Deadline)
+	}
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"0"}}); code != 200 {
+		t.Fatalf("disable timer in setup = %d", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.TimerSecs != 0 || snap.Room.Deadline != 0 {
+		t.Fatalf("turning timer off failed: secs=%d deadline=%d", snap.Room.TimerSecs, snap.Room.Deadline)
 	}
 }
 
@@ -450,18 +483,20 @@ func TestTimerPauseAfterThreeIdleTimeoutsAndNonMemberExpiryNoTouch(t *testing.T)
 	base := "/r/" + room
 	b.post("/join", url.Values{"nickname": {"Bob"}, "code": {room}})
 
-	if err := store.Mutate(context.Background(), room, func(tx *sql.Tx, rm *Room) error {
-		rm.Game = fixedGame()
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
 	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
 	b.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
 
-	// Enable 60s timer.
+	// Enable 60s timer in setup, then enter playing phase with fixedGame.
 	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}}); code != 200 {
 		t.Fatalf("enable timer = %d", code)
+	}
+	if err := store.Mutate(context.Background(), room, func(tx *sql.Tx, rm *Room) error {
+		rm.Phase = PhasePlaying
+		rm.Game = fixedGame()
+		app.restartTimer(rm)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 
 	// Make room appear stale (> 600s old), then trigger timeout #1 via non-member GET /state.

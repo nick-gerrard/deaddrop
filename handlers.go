@@ -35,7 +35,7 @@ const (
 	codeAlphabet       = "ABCDEFGHJKMNPQRSTUVWXYZ" // no I, L, O: easily confused
 	codeLen            = 4
 	maxNickLen         = 20
-	maxHandlersPerTeam = 2
+	maxHandlersPerTeam = 1
 	createRateLimit    = 10
 	createRateWindow   = 10 * time.Minute
 	cspHeader          = "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; img-src 'self' data:"
@@ -167,6 +167,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /r/{code}/join", a.joinRoom)
 	mux.HandleFunc("GET /r/{code}/state", a.state)
 	mux.HandleFunc("POST /r/{code}/team", a.act(a.doTeam))
+	mux.HandleFunc("POST /r/{code}/start", a.act(a.doStart))
+	mux.HandleFunc("POST /r/{code}/abort", a.act(a.doAbort))
 	mux.HandleFunc("POST /r/{code}/clue", a.act(a.doClue))
 	mux.HandleFunc("POST /r/{code}/reveal", a.act(a.doReveal))
 	mux.HandleFunc("POST /r/{code}/end", a.act(a.doEnd))
@@ -623,16 +625,28 @@ func (a *App) doTeam(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 	default:
 		return badRequest("unknown team")
 	}
-	if role == "handler" && !(me.Team == team && me.Role == "handler") {
-		handlers, err := countTeamHandlers(ctx, tx, rm.Code, team)
-		if err != nil {
-			return err
+	if rm.Phase == PhasePlaying {
+		if me.Team != "none" {
+			return &httpError{http.StatusConflict, "Roles are locked during a mission"}
 		}
-		if handlers >= maxHandlersPerTeam {
-			return &httpError{http.StatusConflict, "That team already has 2 handlers"}
+		if team == "none" {
+			return errNoChange
 		}
-		if rm.Game.InProgress() && handlers > 0 {
-			return &httpError{http.StatusConflict, "Can't become handler mid-round"}
+		if role == "handler" {
+			return &httpError{http.StatusConflict, "Can't become Handler during a mission"}
+		}
+	} else {
+		if me.Team == team && me.Role == role {
+			return errNoChange
+		}
+		if role == "handler" {
+			handlers, err := countTeamHandlers(ctx, tx, rm.Code, team)
+			if err != nil {
+				return err
+			}
+			if handlers >= maxHandlersPerTeam {
+				return &httpError{http.StatusConflict, "That team already has a Handler"}
+			}
 		}
 	}
 	if me.Team != team || me.Role != role {
@@ -640,11 +654,62 @@ func (a *App) doTeam(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 			return err
 		}
 	}
-	// The change itself is not a game event, but bump the version via Mutate.
 	return setPlayerTeam(ctx, tx, rm.Code, me.ID, team, role)
 }
 
+func (a *App) doStart(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	if me.Team == "none" {
+		return forbidden("Join a team to start the mission")
+	}
+	if rm.Phase != PhaseSetup {
+		return &httpError{http.StatusConflict, "Mission is already in progress"}
+	}
+	for _, t := range []Team{Ember, Tide} {
+		handlers, err := countTeamHandlers(ctx, tx, rm.Code, string(t))
+		if err != nil {
+			return err
+		}
+		if handlers == 0 {
+			return &httpError{http.StatusConflict, t.Label() + " needs a Handler"}
+		}
+		if handlers > maxHandlersPerTeam {
+			return &httpError{http.StatusConflict, t.Label() + " can only have one Handler"}
+		}
+		operatives, err := countTeamOperatives(ctx, tx, rm.Code, string(t))
+		if err != nil {
+			return err
+		}
+		if operatives < 1 {
+			return &httpError{http.StatusConflict, t.Label() + " needs an operative"}
+		}
+	}
+	rm.Game = a.newGameFor(rm)
+	rm.Phase = PhasePlaying
+	rm.IdleTimeouts = 0
+	if err := clearOldLog(ctx, tx, rm); err != nil {
+		return err
+	}
+	return addLog(ctx, tx, rm, LogEntry{Kind: "round", Team: rm.Game.Starter, Nickname: me.Nickname,
+		Text: fmt.Sprintf("started round %d — %s moves first", rm.Round, rm.Game.Starter.Label())})
+}
+
+func (a *App) doAbort(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	if me.Team == "none" {
+		return forbidden("Join a team to abort the mission")
+	}
+	if rm.Phase != PhasePlaying || rm.Game.Over() {
+		return &httpError{http.StatusConflict, "No mission in progress"}
+	}
+	rm.Phase = PhaseSetup
+	rm.Deadline = 0
+	rm.IdleTimeouts = 0
+	return clearRoundLog(ctx, tx, rm)
+}
+
 func (a *App) doClue(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	if rm.Phase != PhasePlaying {
+		return &httpError{http.StatusConflict, "Mission hasn't started yet"}
+	}
 	g := rm.Game
 	if !me.IsHandler() {
 		return forbidden("Only a handler can give clues")
@@ -655,7 +720,7 @@ func (a *App) doClue(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("number")))
 	if err != nil {
-		return badRequest("Pick a number from 0 to 9")
+		return badRequest("Pick a number from 1 to 9")
 	}
 	if err := g.SubmitClue(team, r.PostFormValue("clue"), n); err != nil {
 		return gameError(err)
@@ -665,6 +730,9 @@ func (a *App) doClue(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 }
 
 func (a *App) doReveal(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	if rm.Phase != PhasePlaying {
+		return &httpError{http.StatusConflict, "Mission hasn't started yet"}
+	}
 	g := rm.Game
 	if me.Team == "none" || me.IsHandler() {
 		return forbidden("Only an operative on the active team can guess")
@@ -703,6 +771,9 @@ func (a *App) doReveal(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r 
 }
 
 func (a *App) doEnd(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	if rm.Phase != PhasePlaying {
+		return &httpError{http.StatusConflict, "Mission hasn't started yet"}
+	}
 	g := rm.Game
 	if me.Team == "none" || me.IsHandler() {
 		return forbidden("Only an operative on the active team can end the turn")
@@ -719,14 +790,17 @@ func (a *App) doEnd(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *ht
 
 func (a *App) doNewRound(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
 	if me.Team == "none" {
-		return forbidden("Join a team to deal a new round")
+		return forbidden("Join a team to start the next round")
 	}
-	rm.Game = a.newGameFor(rm)
+	if rm.Phase != PhasePlaying {
+		return &httpError{http.StatusConflict, "Already in setup"}
+	}
+	if !rm.Game.Over() {
+		return &httpError{http.StatusConflict, "Mission in progress — abort it first"}
+	}
+	rm.Phase = PhaseSetup
 	rm.Round++
+	rm.Deadline = 0
 	rm.IdleTimeouts = 0
-	if err := clearOldLog(ctx, tx, rm); err != nil {
-		return err
-	}
-	return addLog(ctx, tx, rm, LogEntry{Kind: "round", Team: rm.Game.Starter, Nickname: me.Nickname,
-		Text: fmt.Sprintf("dealt round %d — %s moves first", rm.Round, rm.Game.Starter.Label())})
+	return clearOldLog(ctx, tx, rm)
 }
