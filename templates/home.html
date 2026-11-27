@@ -1,24 +1,50 @@
 {{template "head" .}}
 <main class="gate">
-  <div class="dossier">
+  <div class="dossier gate-hero">
     <p class="classified">CLASSIFIED</p>
     <h1 class="title">DEAD DROP</h1>
-    <p class="tagline">A game of secret signals for two rival spy rings. Handlers know the key. Operatives only have a one-word clue.</p>
+    <p class="tagline">Secret signals for two rival spy rings.</p>
     {{if .Error}}<p class="form-error" role="alert">{{.Error}}</p>{{end}}
-    <form method="post" class="gate-form">
-      <label for="nickname">Codename (your nickname)</label>
-      <input id="nickname" name="nickname" value="{{.Nick}}" maxlength="20" required autocomplete="nickname" placeholder="e.g. Fox">
-      <label class="check-row" for="public">
-        <input id="public" type="checkbox" name="public" value="1">
-        <span>List in public lobby</span>
-      </label>
-      <button class="btn primary" type="submit" formaction="/create">Create room</button>
-      <div class="or"><span>or join a room</span></div>
-      <label for="code">Room code</label>
-      <input id="code" name="code" value="{{.Code}}" maxlength="4" minlength="4" pattern="[A-Za-z]{4}" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABCD" class="code-input">
-      <button class="btn" type="submit" formaction="/join">Join</button>
-    </form>
+    <div class="gate-actions">
+      <button type="button" class="btn primary wide" data-open-sheet="create-sheet">Create room</button>
+      <button type="button" class="btn wide" data-open-sheet="join-sheet">Join with code</button>
+    </div>
   </div>
+
+  <dialog id="create-sheet" class="sheet" aria-labelledby="create-sheet-title">
+    <div class="sheet-inner">
+      <div class="sheet-head">
+        <h2 id="create-sheet-title">Create room</h2>
+        <button type="button" class="sheet-close" data-close-sheet aria-label="Close">✕</button>
+      </div>
+      <form method="post" action="/create" class="gate-form">
+        <label for="create-nick">Codename</label>
+        <input id="create-nick" name="nickname" value="{{.Nick}}" maxlength="20" required autocomplete="nickname" placeholder="e.g. Fox">
+        <label class="check-row" for="create-public">
+          <input id="create-public" type="checkbox" name="public" value="1">
+          <span>List in public lobby</span>
+        </label>
+        <button class="btn primary" type="submit">Create</button>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="join-sheet" class="sheet" aria-labelledby="join-sheet-title">
+    <div class="sheet-inner">
+      <div class="sheet-head">
+        <h2 id="join-sheet-title">Join with code</h2>
+        <button type="button" class="sheet-close" data-close-sheet aria-label="Close">✕</button>
+      </div>
+      <form method="post" action="/join" class="gate-form">
+        <label for="join-nick">Codename</label>
+        <input id="join-nick" name="nickname" value="{{.Nick}}" maxlength="20" required autocomplete="nickname" placeholder="e.g. Fox">
+        <label for="join-code">Room code</label>
+        <input id="join-code" name="code" value="{{.Code}}" maxlength="4" minlength="4" pattern="[A-Za-z]{4}" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABCD" class="code-input" required>
+        <button class="btn primary" type="submit">Join</button>
+      </form>
+    </div>
+  </dialog>
+
   <section class="lobby-panel" aria-label="Open rooms">
     <h2>Open rooms</h2>
     <div id="lobby-list" hx-get="/lobby" hx-trigger="load, every 5s" hx-target="#lobby-list" hx-swap="outerHTML">

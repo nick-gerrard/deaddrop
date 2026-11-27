@@ -1,4 +1,6 @@
 (function () {
+  document.documentElement.classList.add('js');
+
   var toastEl = document.getElementById('toast'), toastTimer;
   function clearToast() {
     clearTimeout(toastTimer);
@@ -26,7 +28,7 @@
     var btn = document.getElementById('mute-btn');
     if (!btn) return;
     btn.setAttribute('aria-pressed', muted ? 'true' : 'false');
-    btn.textContent = muted ? 'Muted' : 'Sound on';
+    btn.textContent = muted ? 'Muted' : 'Sound';
   }
   updateMuteBtn();
 
@@ -255,13 +257,19 @@
 
     if (!document.querySelector('.overlay')) delete document.documentElement.dataset.ovx;
 
-    // Sync series score and visibility tag in header
+    // Sync series score in header (hide when 0 - 0)
     var g = document.getElementById('game');
     if (g) {
-      var ew = document.querySelector('#series-score [data-wins="ember"]');
-      var tw = document.querySelector('#series-score [data-wins="tide"]');
-      if (ew && g.dataset.emberWins != null) ew.textContent = g.dataset.emberWins;
-      if (tw && g.dataset.tideWins != null) tw.textContent = g.dataset.tideWins;
+      var ss = document.getElementById('series-score');
+      if (ss && g.dataset.emberWins != null && g.dataset.tideWins != null) {
+        var ewNum = Number(g.dataset.emberWins) || 0;
+        var twNum = Number(g.dataset.tideWins) || 0;
+        var ew = ss.querySelector('[data-wins="ember"]');
+        var tw = ss.querySelector('[data-wins="tide"]');
+        if (ew) ew.textContent = ewNum;
+        if (tw) tw.textContent = twNum;
+        ss.classList.toggle('hidden', ewNum === 0 && twNum === 0);
+      }
       var vis = document.getElementById('room-vis');
       if (vis && g.dataset.public != null) {
         var isPub = g.dataset.public === '1';
@@ -349,7 +357,43 @@
     if (e.key === 'Escape') disarmAll();
   });
 
+  // ---------- home sheets (<dialog>) ----------
+  var lastSheetTrigger = null;
+  document.querySelectorAll('dialog.sheet').forEach(function (dlg) {
+    dlg.addEventListener('close', function () {
+      var trig = lastSheetTrigger;
+      lastSheetTrigger = null;
+      if (trig && typeof trig.focus === 'function') trig.focus();
+    });
+    dlg.addEventListener('click', function (e) {
+      if (e.target === dlg) dlg.close();
+    });
+  });
+
   document.addEventListener('click', function (e) {
+    var openBtn = e.target.closest('[data-open-sheet]');
+    if (openBtn) {
+      var dlg = document.getElementById(openBtn.dataset.openSheet);
+      if (dlg && typeof dlg.showModal === 'function') {
+        lastSheetTrigger = openBtn;
+        dlg.showModal();
+        var inputs = dlg.querySelectorAll('input:not([type="checkbox"])');
+        var target = inputs[0];
+        for (var i = 0; i < inputs.length; i++) {
+          if (!inputs[i].value) { target = inputs[i]; break; }
+        }
+        if (target) target.focus();
+      }
+      return;
+    }
+
+    var closeBtn = e.target.closest('[data-close-sheet]');
+    if (closeBtn) {
+      var parentDlg = closeBtn.closest('dialog');
+      if (parentDlg) parentDlg.close();
+      return;
+    }
+
     var mute = e.target.closest('#mute-btn');
     if (mute) {
       muted = !muted;

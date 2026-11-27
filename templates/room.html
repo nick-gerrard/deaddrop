@@ -1,16 +1,12 @@
 {{template "head" .}}
 <header class="top">
-  <div class="brand">
-    <span class="classified">CLASSIFIED</span>
+  <div class="top-left">
     <h1>DEAD DROP</h1>
+    <div class="case" aria-label="Room code {{.Code}}">CASE <b>{{.Code}}</b></div>
+    <div class="series{{if and (not .EmberWins) (not .TideWins)}} hidden{{end}}" id="series-score" aria-label="Series score"><span class="s-ember" data-wins="ember">{{.EmberWins}}</span><span class="sep">–</span><span class="s-tide" data-wins="tide">{{.TideWins}}</span></div>
   </div>
-  <div class="case">CASE No. <b>{{.Code}}</b></div>
-  <span class="vis-tag {{if .Public}}vis-public{{else}}vis-private{{end}}" id="room-vis">{{if .Public}}PUBLIC{{else}}PRIVATE{{end}}</span>
-  <div class="series" id="series-score" aria-label="Series score"><span class="s-ember">EMBER <b data-wins="ember">{{.EmberWins}}</b></span> <span class="sep">–</span> <span class="s-tide"><b data-wins="tide">{{.TideWins}}</b> TIDE</span></div>
   <div class="top-actions">
-    <span class="agent">Agent <b>{{.MeName}}</b></span>
-    <button type="button" class="btn small" id="mute-btn" aria-pressed="false" title="Toggle sound">Sound on</button>
-    <button type="button" class="btn small" id="copy-link" data-path="/r/{{.Code}}">Copy invite link</button>
+    <button type="button" class="btn compact" id="mute-btn" aria-pressed="false" title="Toggle sound">Sound</button>
   </div>
 </header>
 <div class="wrap">

@@ -276,10 +276,10 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		v.YouLine = "Spectating"
 	case me.Role == "handler":
 		v.Role = fmt.Sprintf("%s %s", myTeam.Label(), me.Role)
-		v.YouLine = fmt.Sprintf("You: %s Handler", myTeam.Label())
+		v.YouLine = fmt.Sprintf("%s Handler", myTeam.Label())
 	default:
 		v.Role = fmt.Sprintf("%s %s", myTeam.Label(), me.Role)
-		v.YouLine = fmt.Sprintf("You: %s operative", myTeam.Label())
+		v.YouLine = fmt.Sprintf("%s Operative", myTeam.Label())
 	}
 
 	for i, t := range []Team{Ember, Tide} {
