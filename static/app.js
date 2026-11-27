@@ -1,4 +1,6 @@
 (function () {
+  document.documentElement.classList.add('js');
+
   var toastEl = document.getElementById('toast'), toastTimer;
   function clearToast() {
     clearTimeout(toastTimer);
@@ -355,7 +357,43 @@
     if (e.key === 'Escape') disarmAll();
   });
 
+  // ---------- home sheets (<dialog>) ----------
+  var lastSheetTrigger = null;
+  document.querySelectorAll('dialog.sheet').forEach(function (dlg) {
+    dlg.addEventListener('close', function () {
+      var trig = lastSheetTrigger;
+      lastSheetTrigger = null;
+      if (trig && typeof trig.focus === 'function') trig.focus();
+    });
+    dlg.addEventListener('click', function (e) {
+      if (e.target === dlg) dlg.close();
+    });
+  });
+
   document.addEventListener('click', function (e) {
+    var openBtn = e.target.closest('[data-open-sheet]');
+    if (openBtn) {
+      var dlg = document.getElementById(openBtn.dataset.openSheet);
+      if (dlg && typeof dlg.showModal === 'function') {
+        lastSheetTrigger = openBtn;
+        dlg.showModal();
+        var inputs = dlg.querySelectorAll('input:not([type="checkbox"])');
+        var target = inputs[0];
+        for (var i = 0; i < inputs.length; i++) {
+          if (!inputs[i].value) { target = inputs[i]; break; }
+        }
+        if (target) target.focus();
+      }
+      return;
+    }
+
+    var closeBtn = e.target.closest('[data-close-sheet]');
+    if (closeBtn) {
+      var parentDlg = closeBtn.closest('dialog');
+      if (parentDlg) parentDlg.close();
+      return;
+    }
+
     var mute = e.target.closest('#mute-btn');
     if (mute) {
       muted = !muted;
