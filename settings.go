@@ -145,6 +145,7 @@ func wordsFor(pack, custom string) []string {
 func (a *App) newGameFor(rm *Room) *Game { return NewGame(newRNG(), wordsFor(rm.Pack, rm.Custom)) }
 
 func (a *App) doSettings(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
+	// Team-only permission and setup-only lock also gated in view.go (CanSettings) and templates/game.html.
 	if me.Team == "none" {
 		return forbidden("Join a team to change mission settings")
 	}
@@ -238,36 +239,6 @@ func (a *App) doSeriesReset(ctx context.Context, tx *sql.Tx, rm *Room, me *Playe
 	}
 	rm.EmberWins, rm.TideWins = 0, 0
 	return addLog(ctx, tx, rm, LogEntry{Kind: "settings", Nickname: me.Nickname, Text: "reset the series score to 0 – 0"})
-}
-
-// doMark toggles the caller's suggestion mark on an unrevealed card. Only
-// operatives on the guessing team may mark.
-func (a *App) doMark(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *http.Request) error {
-	if rm.Phase != PhasePlaying {
-		return &httpError{http.StatusConflict, "Mission hasn't started yet"}
-	}
-	g := rm.Game
-	if me.Team == "none" || me.IsHandler() {
-		return forbidden("Only operatives on the guessing team can mark cards")
-	}
-	if Team(me.Team) != g.Turn && !g.Over() {
-		return forbidden("It is not your team's turn")
-	}
-	if g.Over() {
-		return gameError(ErrGameOver)
-	}
-	if !g.HasClue {
-		return gameError(ErrNoClue)
-	}
-	idx, err := strconv.Atoi(r.PostFormValue("card"))
-	if err != nil || idx < 0 || idx >= len(g.Cards) {
-		return badRequest("no such card")
-	}
-	if g.Cards[idx].Revealed {
-		return gameError(ErrAlreadyRevealed)
-	}
-	_, err = toggleMark(ctx, tx, rm.Code, idx, me.ID)
-	return err
 }
 
 // ---------- turn timer ----------

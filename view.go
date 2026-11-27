@@ -248,7 +248,7 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		EmberWins:   s.Room.EmberWins,
 		TideWins:    s.Room.TideWins,
 		Public:      s.Room.Public,
-		CanSettings: me.Team != "none",
+		CanSettings: me.Team != "none", // server-side check in settings.go (doSettings, doSeriesReset)
 	}
 	for _, secs := range timerChoices {
 		lbl := "Off"
@@ -305,6 +305,7 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 
 	if v.IsSetup {
 		v.TurnPhase = "setup"
+		// Mirror of team-readiness rules enforced server-side in handlers_setup.go (doStart).
 		for _, tv := range v.Teams {
 			switch {
 			case len(tv.Handlers) == 0:
@@ -330,7 +331,9 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		v.TimerText, v.TimerLow = formatCountdown(s.Room.Deadline - nowMs)
 	}
 
+	// Key visibility is enforced here (and never rendered in setup); templates/game.html checks .ShowKey.
 	v.ShowKey = me.IsHandler() || g.Over()
+	// Mirror of play-phase rules enforced server-side in handlers_play.go and game.go.
 	v.CanClue = !g.Over() && !g.HasClue && me.IsHandler() && myTeam == g.Turn
 	v.CanGuess = !g.Over() && g.HasClue && me.Team != "none" && !me.IsHandler() && myTeam == g.Turn
 	v.CanEnd = v.CanGuess && g.Guesses >= 1
@@ -352,6 +355,7 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		}
 	}
 
+	// Marks are created in handlers_play.go (doMark); visibility is restricted to the marking team here.
 	marksByCard := make(map[int][]MarkView)
 	myMarks := make(map[int]bool)
 	if me.Team != "none" {
