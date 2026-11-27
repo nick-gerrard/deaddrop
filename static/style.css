@@ -430,8 +430,10 @@ html[data-ovx] .overlay { display: none; }
   .scoreboard { grid-template-columns: 1fr 1fr; gap: 8px; }
   .score.t-ember { grid-column: 1; grid-row: 2; }
   .score.t-tide { grid-column: 2; grid-row: 2; }
-  .banner { grid-column: 1 / -1; grid-row: 1; font-size: .92rem; padding: 8px 10px; }
-  .clue-callout { display: block; }
+  .banner { grid-column: 1 / -1; grid-row: 1; font-size: .92rem; padding: 8px 10px; gap: 6px 8px; }
+  .banner strong { margin-right: 0; }
+  .banner .banner-clue { display: none; }
+  .clue-callout { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 6px; }
   .recap { grid-template-columns: 1fr; }
   .score { padding: 6px; }
   .score .n { font-size: 1.8rem; }
@@ -444,6 +446,20 @@ html[data-ovx] .overlay { display: none; }
 
 @media (max-width: 640px), (pointer: coarse) {
   .btn, .btn.small { min-height: 44px; }
+  .settings summary { min-height: 44px; }
+  .card.clickable.armed { z-index: 10; }
+  .card.armed .card-confirm {
+    inset: auto;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    min-width: max(100%, 136px);
+    box-shadow: 0 8px 24px rgba(0,0,0,.85), 0 0 0 2px var(--accent);
+    z-index: 10;
+  }
+  .card:nth-child(5n+1).armed .card-confirm { left: 0; transform: translateY(-50%); }
+  .card:nth-child(5n).armed .card-confirm { left: auto; right: 0; transform: translateY(-50%); }
+  .card-confirm button { min-height: 44px; font-size: .82rem; padding: 8px 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

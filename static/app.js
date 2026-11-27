@@ -168,6 +168,27 @@
   // ---------- htmx lifecycle ----------
   var b = document.body;
   var prev = null;
+  var settingsDirty = false;
+
+  function isFormField(el) {
+    return !!(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'));
+  }
+
+  function markSettingsDirty(e) {
+    if (isFormField(e.target) && e.target.closest && e.target.closest('#settings-panel')) {
+      settingsDirty = true;
+    }
+  }
+  document.addEventListener('input', markSettingsDirty);
+  document.addEventListener('change', markSettingsDirty);
+
+  // Initial autofocus for clue input when landing on a page where it's already active.
+  (function () {
+    var ci = document.getElementById('clue-word');
+    if (ci && !isFormField(document.activeElement)) {
+      ci.focus();
+    }
+  })();
 
   b.addEventListener('htmx:beforeRequest', function (e) {
     if (e.detail.elt && e.detail.elt.id === 'game') {
@@ -176,7 +197,7 @@
         return;
       }
       var ae = document.activeElement;
-      if (ae && ae.closest && ae.closest('#settings-panel')) {
+      if (settingsDirty && isFormField(ae) && ae.closest && ae.closest('#settings-panel')) {
         e.preventDefault();
       }
     }
@@ -193,11 +214,20 @@
     var g = document.getElementById('game');
     var sp = document.getElementById('settings-panel');
     var armedEl = document.querySelector('.card.armed');
+    var cw = document.getElementById('clue-word');
+    var cn = document.getElementById('clue-num');
+    var ae = document.activeElement;
     prev = {
       revealed: {},
+      round: g ? g.dataset.round : '',
       yourTurn: g ? g.dataset.yourTurn : '0',
       turnPhase: g ? g.dataset.turnPhase : '',
-      hadClueInput: !!document.getElementById('clue-word'),
+      hadClueInput: !!cw,
+      clueWord: cw ? cw.value : '',
+      clueNum: cn ? cn.value : '',
+      clueSelStart: cw ? cw.selectionStart : null,
+      clueSelEnd: cw ? cw.selectionEnd : null,
+      focusedId: ae && ae.id ? ae.id : '',
       settingsOpen: !!(sp && sp.open),
       armedIdx: armedEl ? armedEl.dataset.i : null
     };
@@ -208,6 +238,7 @@
     if (!prev) return;
     var snap = prev;
     prev = null;
+    settingsDirty = false;
 
     var newlyRevealed = 0;
     var burnedRevealed = false;
@@ -242,11 +273,24 @@
       if (card) card.classList.add('armed');
     }
 
-    // Autofocus clue input when it newly appears
+    // Preserve clue form state across same-round/same-phase polls, or autofocus when newly shown
     var clueInput = document.getElementById('clue-word');
-    if (clueInput && !snap.hadClueInput) {
-      var ae = document.activeElement;
-      if (!ae || (ae.tagName !== 'INPUT' && ae.tagName !== 'TEXTAREA' && ae.tagName !== 'SELECT')) {
+    var clueNum = document.getElementById('clue-num');
+    var sameRound = !!(g && g.dataset.round === snap.round);
+    var samePhase = !!(g && g.dataset.turnPhase === snap.turnPhase);
+    if (clueInput && snap.hadClueInput && sameRound && samePhase) {
+      clueInput.value = snap.clueWord;
+      if (clueNum && snap.clueNum !== '') clueNum.value = snap.clueNum;
+      if (snap.focusedId === 'clue-word') {
+        clueInput.focus();
+        if (snap.clueSelStart != null && snap.clueSelEnd != null) {
+          try { clueInput.setSelectionRange(snap.clueSelStart, snap.clueSelEnd); } catch (_) {}
+        }
+      } else if (snap.focusedId === 'clue-num' && clueNum) {
+        clueNum.focus();
+      }
+    } else if (clueInput && (!snap.hadClueInput || !sameRound)) {
+      if (!isFormField(document.activeElement)) {
         clueInput.focus();
       }
     }

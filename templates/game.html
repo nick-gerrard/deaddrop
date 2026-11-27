@@ -1,11 +1,11 @@
-{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}">
+{{define "game"}}<div id="game" hx-get="/r/{{.Code}}/state?v={{.Version}}" hx-trigger="every 1500ms, refresh" hx-target="#game" hx-swap="outerHTML" data-round="{{.Round}}" data-your-turn="{{if .YourTurn}}1{{else}}0{{end}}" data-turn-phase="{{.TurnPhase}}" data-ember-wins="{{.EmberWins}}" data-tide-wins="{{.TideWins}}">
   <section class="scoreboard" aria-label="Scores">
     {{range .Teams}}
     <div class="score t-{{.Team}}"><span class="n">{{.Remaining}}</span><span class="lbl">{{.Label}} agents left</span></div>
     {{end}}
-    <div class="banner b-{{.Banner.Class}}" role="status"><p>
-      <strong>{{.Banner.Head}}</strong>{{if .Banner.ClueWord}} — clue: <span class="clue">{{.Banner.ClueWord}} {{.Banner.ClueNum}}</span>, {{.Banner.Detail}}{{end}}
-    </p>{{if .Deadline}}<span class="timer-pill{{if .TimerLow}} low{{end}}" data-deadline="{{.Deadline}}" data-now="{{.NowMs}}" aria-label="Turn timer">{{.TimerText}}</span>{{end}}</div>
+    <div class="banner b-{{.Banner.Class}}" role="status"><div class="banner-main">
+      <strong>{{.Banner.Head}}</strong>{{if .Banner.ClueWord}}<span class="banner-clue"> — clue: <span class="clue">{{.Banner.ClueWord}} {{.Banner.ClueNum}}</span>, {{.Banner.Detail}}</span>{{end}}
+    </div>{{if .Deadline}}<span class="timer-pill{{if .TimerLow}} low{{end}}" data-deadline="{{.Deadline}}" data-now="{{.NowMs}}" aria-label="Turn timer">{{.TimerText}}</span>{{end}}</div>
   </section>
 
   <div class="layout">
@@ -21,11 +21,11 @@
       <form class="clue-form" hx-post="/r/{{.Code}}/clue" autocomplete="off">
         <div class="field grow">
           <label for="clue-word">Clue (one word)</label>
-          <input id="clue-word" name="clue" hx-preserve maxlength="24" required autofocus autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
+          <input id="clue-word" name="clue" maxlength="24" required autocapitalize="characters" spellcheck="false" placeholder="e.g. OCEAN">
         </div>
         <div class="field">
           <label for="clue-num">Number</label>
-          <select id="clue-num" name="number" hx-preserve>
+          <select id="clue-num" name="number">
             <option value="0">0 (unlimited)</option>
             <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option>
             <option value="4">4</option><option value="5">5</option><option value="6">6</option>

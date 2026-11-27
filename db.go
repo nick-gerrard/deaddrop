@@ -59,9 +59,10 @@ var roomColumns = []struct{ name, def string }{
 	{"custom_words", "TEXT NOT NULL DEFAULT ''"}, // newline separated
 	{"ember_wins", "INTEGER NOT NULL DEFAULT 0"},
 	{"tide_wins", "INTEGER NOT NULL DEFAULT 0"},
+	{"idle_timeouts", "INTEGER NOT NULL DEFAULT 0"},
 }
 
-const roomSelect = `SELECT code, version, round, game, updated_at, deadline, timer_secs, word_pack, custom_words, ember_wins, tide_wins FROM rooms`
+const roomSelect = `SELECT code, version, round, game, updated_at, deadline, timer_secs, word_pack, custom_words, ember_wins, tide_wins, idle_timeouts FROM rooms`
 
 func migrate(db *sql.DB) error {
 	rows, err := db.Query(`PRAGMA table_info(rooms)`)
@@ -97,6 +98,7 @@ func migrate(db *sql.DB) error {
 const (
 	maxPlayersPerRoom = 40
 	maxLiveRooms      = 1000
+	maxLogPerRoom     = 200
 )
 
 var (
@@ -135,12 +137,13 @@ type Room struct {
 	Game      *Game
 	UpdatedAt int64
 
-	Deadline  int64  // unix ms when the current turn phase times out; 0 = none
-	TimerSecs int    // 0 = timer off
-	Pack      string // classic | hard | mixed | custom (applies from the next round)
-	Custom    string // newline separated custom words
-	EmberWins int
-	TideWins  int
+	Deadline     int64  // unix ms when the current turn phase times out; 0 = none
+	TimerSecs    int    // 0 = timer off
+	Pack         string // classic | hard | mixed | custom (applies from the next round)
+	Custom       string // newline separated custom words
+	EmberWins    int
+	TideWins     int
+	IdleTimeouts int
 }
 
 // Wins returns the series score for a team.
@@ -168,7 +171,7 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanRoom(row rowScanner, rm *Room) error {
 	var blob string
-	if err := row.Scan(&rm.Code, &rm.Version, &rm.Round, &blob, &rm.UpdatedAt, &rm.Deadline, &rm.TimerSecs, &rm.Pack, &rm.Custom, &rm.EmberWins, &rm.TideWins); err != nil {
+	if err := row.Scan(&rm.Code, &rm.Version, &rm.Round, &blob, &rm.UpdatedAt, &rm.Deadline, &rm.TimerSecs, &rm.Pack, &rm.Custom, &rm.EmberWins, &rm.TideWins, &rm.IdleTimeouts); err != nil {
 		return err
 	}
 	rm.Game = new(Game)
@@ -249,6 +252,16 @@ func (s *Store) CreateRoom(ctx context.Context, code string, g *Game, p Player) 
 // Mutate runs fn on the room inside one write transaction. If fn returns nil
 // the (possibly modified) game is saved and the room version is bumped.
 func (s *Store) Mutate(ctx context.Context, code string, fn func(tx *sql.Tx, rm *Room) error) error {
+	return s.mutate(ctx, code, true, fn)
+}
+
+// MutateNoTouch is like Mutate but does not bump updated_at, so background or
+// inactivity transitions (such as turn expiry) do not keep idle rooms alive.
+func (s *Store) MutateNoTouch(ctx context.Context, code string, fn func(tx *sql.Tx, rm *Room) error) error {
+	return s.mutate(ctx, code, false, fn)
+}
+
+func (s *Store) mutate(ctx context.Context, code string, touch bool, fn func(tx *sql.Tx, rm *Room) error) error {
 	tx, err := s.w.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -272,8 +285,14 @@ func (s *Store) Mutate(ctx context.Context, code string, fn func(tx *sql.Tx, rm 
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, version=version+1, updated_at=? WHERE code=?`,
-		string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, now(), code); err != nil {
+	if touch {
+		_, err = tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, idle_timeouts=?, version=version+1, updated_at=? WHERE code=?`,
+			string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, rm.IdleTimeouts, now(), code)
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE rooms SET game=?, round=?, deadline=?, timer_secs=?, word_pack=?, custom_words=?, ember_wins=?, tide_wins=?, idle_timeouts=?, version=version+1 WHERE code=?`,
+			string(out), rm.Round, rm.Deadline, rm.TimerSecs, rm.Pack, rm.Custom, rm.EmberWins, rm.TideWins, rm.IdleTimeouts, code)
+	}
+	if err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -349,8 +368,12 @@ func clearPlayerMarks(ctx context.Context, tx *sql.Tx, code, pid string) error {
 }
 
 func addLog(ctx context.Context, tx *sql.Tx, rm *Room, e LogEntry) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO log(room, round, kind, team, color, nickname, text, created_at) VALUES (?,?,?,?,?,?,?,?)`,
-		rm.Code, rm.Round, e.Kind, string(e.Team), string(e.Color), e.Nickname, e.Text, now())
+	if _, err := tx.ExecContext(ctx, `INSERT INTO log(room, round, kind, team, color, nickname, text, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+		rm.Code, rm.Round, e.Kind, string(e.Team), string(e.Color), e.Nickname, e.Text, now()); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM log WHERE room=? AND id NOT IN (SELECT id FROM log WHERE room=? ORDER BY id DESC LIMIT ?)`,
+		rm.Code, rm.Code, maxLogPerRoom)
 	return err
 }
 

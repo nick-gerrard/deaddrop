@@ -23,6 +23,7 @@ const (
 	maxCustomWords   = 400
 	maxCustomWordLen = 20
 	maxSettingsBody  = 16 << 10
+	maxIdleTimeouts  = 3
 )
 
 var timerChoices = []int{0, 60, 90, 120, 180}
@@ -155,8 +156,16 @@ func (a *App) doSettings(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, 
 			return badRequest("Pick a turn timer from the list")
 		}
 		if n != rm.TimerSecs {
+			wasOff := rm.TimerSecs == 0
 			rm.TimerSecs = n
-			a.restartTimer(rm)
+			switch {
+			case n == 0:
+				rm.Deadline = 0
+				rm.IdleTimeouts = 0
+			case wasOff:
+				rm.IdleTimeouts = 0
+				a.restartTimer(rm)
+			}
 			changes = append(changes, "turn timer "+timerLabel(n))
 		}
 	}
@@ -273,7 +282,7 @@ func (a *App) expireTurn(ctx context.Context, code string) {
 	if err != nil || dl == 0 || a.nowMs() <= dl {
 		return
 	}
-	err = a.store.Mutate(ctx, code, func(tx *sql.Tx, rm *Room) error {
+	err = a.store.MutateNoTouch(ctx, code, func(tx *sql.Tx, rm *Room) error {
 		if rm.Deadline == 0 || a.nowMs() <= rm.Deadline || rm.Game.Over() {
 			return errNoChange
 		}
@@ -284,7 +293,15 @@ func (a *App) expireTurn(ctx context.Context, code string) {
 		if err := addLog(ctx, tx, rm, LogEntry{Kind: "end", Team: team, Text: "time ran out — turn passes"}); err != nil {
 			return err
 		}
-		a.restartTimer(rm)
+		rm.IdleTimeouts++
+		if rm.IdleTimeouts >= maxIdleTimeouts {
+			rm.Deadline = 0
+			if err := addLog(ctx, tx, rm, LogEntry{Kind: "settings", Text: "Timer paused — nobody's moving"}); err != nil {
+				return err
+			}
+		} else {
+			a.restartTimer(rm)
+		}
 		return clearMarks(ctx, tx, rm.Code)
 	})
 	if err != nil && err != ErrRoomNotFound {

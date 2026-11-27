@@ -78,6 +78,7 @@ type TeamRecap struct {
 type RoomView struct {
 	Code    string
 	Version int64
+	Round   int
 	AssetV  string
 	MeName  string
 	MeTeam  string
@@ -219,7 +220,7 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 		pack = PackClassic
 	}
 	v := &RoomView{
-		Code: s.Room.Code, Version: s.Room.Version, AssetV: assetV,
+		Code: s.Room.Code, Version: s.Room.Version, Round: s.Room.Round, AssetV: assetV,
 		MeName: me.Nickname, MeTeam: me.Team, MeRole: me.Role,
 		Game: g, Over: g.Over(), Log: s.Log,
 		NowMs:       nowMs,
@@ -278,20 +279,22 @@ func buildView(s *Snapshot, pid, assetV string, nowMs int64) *RoomView {
 
 	marksByCard := make(map[int][]MarkView)
 	myMarks := make(map[int]bool)
-	for _, m := range s.Marks {
-		p, ok := playersByID[m.PlayerID]
-		if !ok {
-			continue
+	if me.Team != "none" {
+		for _, m := range s.Marks {
+			p, ok := playersByID[m.PlayerID]
+			if !ok || p.Team != me.Team {
+				continue
+			}
+			mine := m.PlayerID == pid
+			if mine {
+				myMarks[m.Card] = true
+			}
+			marksByCard[m.Card] = append(marksByCard[m.Card], MarkView{
+				Initials: initials(p.Nickname),
+				Nickname: p.Nickname,
+				Mine:     mine,
+			})
 		}
-		mine := m.PlayerID == pid
-		if mine {
-			myMarks[m.Card] = true
-		}
-		marksByCard[m.Card] = append(marksByCard[m.Card], MarkView{
-			Initials: initials(p.Nickname),
-			Nickname: p.Nickname,
-			Mine:     mine,
-		})
 	}
 
 	for i, c := range g.Cards {

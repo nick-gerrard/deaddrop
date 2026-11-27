@@ -321,10 +321,26 @@ func TestMarksPermissionsAndLifecycle(t *testing.T) {
 	if code != 200 || !strings.Contains(body, ">BO<") {
 		t.Fatalf("op2 mark = %d (expected BO chip)", code)
 	}
-	// Marks are visible to everyone on the board (including handler & spectator).
+	// Marks are visible to operatives and handlers on the marking team,
+	// and hidden from the other team and spectators.
 	_, hBody := handler.get(base + "/state?v=0")
 	if !strings.Contains(hBody, ">JD<") || !strings.Contains(hBody, ">BO<") {
-		t.Errorf("handler did not see operative mark chips")
+		t.Errorf("marking team handler did not see operative mark chips")
+	}
+	_, eBody := enemy.get(base + "/state?v=0")
+	if strings.Contains(eBody, ">JD<") || strings.Contains(eBody, ">BO<") {
+		t.Errorf("other team operative should not see marking team's marks")
+	}
+	_, sBody := spec.get(base + "/state?v=0")
+	if strings.Contains(sBody, ">JD<") || strings.Contains(sBody, ">BO<") {
+		t.Errorf("spectator should not see marking team's marks")
+	}
+	enemyHandler := newClient(t, h)
+	enemyHandler.post("/join", url.Values{"nickname": {"EnemyH"}, "code": {room}})
+	enemyHandler.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+	_, ehBody := enemyHandler.get(base + "/state?v=0")
+	if strings.Contains(ehBody, ">JD<") || strings.Contains(ehBody, ">BO<") {
+		t.Errorf("other team handler should not see marking team's marks")
 	}
 
 	// Toggle op2's mark off on card 0, and put a mark on card 1.
@@ -354,5 +370,272 @@ func TestMarksPermissionsAndLifecycle(t *testing.T) {
 	snap, _ = store.Snapshot(context.Background(), room)
 	if len(snap.Marks) != 0 {
 		t.Fatalf("marks not cleared on end turn: %v", snap.Marks)
+	}
+}
+
+func TestSettingsTimerDeadlinePreservation(t *testing.T) {
+	store, app, h := newTestApp(t)
+	nowT := time.Unix(1_700_000_000, 0)
+	app.now = func() time.Time { return nowT }
+
+	a := newClient(t, h)
+	_, loc := a.post("/create", url.Values{"nickname": {"Alice"}})
+	room := strings.TrimPrefix(loc, "/r/")
+	base := "/r/" + room
+
+	snap, _ := store.Snapshot(context.Background(), room)
+	firstTeam := snap.Room.Game.Turn
+	a.post(base+"/team", url.Values{"team": {string(firstTeam)}, "role": {"handler"}})
+
+	// Enable 60s timer -> starts deadline.
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}}); code != 200 {
+		t.Fatalf("enable timer = %d", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	origDeadline := snap.Room.Deadline
+	if origDeadline != nowT.UnixMilli()+60_000 {
+		t.Fatalf("origDeadline = %d, want %d", origDeadline, nowT.UnixMilli()+60_000)
+	}
+
+	// Advance 20s and re-save settings (change pack, same timer): deadline must not move.
+	nowT = nowT.Add(20 * time.Second)
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}, "pack": {"hard"}}); code != 200 {
+		t.Fatalf("resave settings = %d", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Deadline != origDeadline {
+		t.Fatalf("resaving settings moved deadline: got %d, want %d", snap.Room.Deadline, origDeadline)
+	}
+
+	// Change timer duration from 60s to 120s: current turn deadline stays as is.
+	nowT = nowT.Add(10 * time.Second)
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"120"}}); code != 200 {
+		t.Fatalf("change timer = %d", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Deadline != origDeadline {
+		t.Fatalf("changing duration restarted running deadline: got %d, want %d", snap.Room.Deadline, origDeadline)
+	}
+	if snap.Room.TimerSecs != 120 {
+		t.Fatalf("TimerSecs = %d, want 120", snap.Room.TimerSecs)
+	}
+
+	// Next turn phase (giving a clue) uses the new 120s duration.
+	if code, _ := a.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"1"}}); code != 200 {
+		t.Fatalf("clue = %d", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Deadline != nowT.UnixMilli()+120_000 {
+		t.Fatalf("next turn deadline = %d, want %d", snap.Room.Deadline, nowT.UnixMilli()+120_000)
+	}
+
+	// Turning timer off clears the deadline immediately.
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"0"}}); code != 200 {
+		t.Fatalf("disable timer = %d", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Deadline != 0 {
+		t.Fatalf("turning timer off did not clear deadline: got %d", snap.Room.Deadline)
+	}
+}
+
+func TestTimerPauseAfterThreeIdleTimeoutsAndNonMemberExpiryNoTouch(t *testing.T) {
+	store, app, h := newTestApp(t)
+	nowT := time.Unix(1_700_000_000, 0)
+	app.now = func() time.Time { return nowT }
+
+	a, b, outsider := newClient(t, h), newClient(t, h), newClient(t, h)
+	_, loc := a.post("/create", url.Values{"nickname": {"Alice"}})
+	room := strings.TrimPrefix(loc, "/r/")
+	base := "/r/" + room
+	b.post("/join", url.Values{"nickname": {"Bob"}, "code": {room}})
+
+	if err := store.Mutate(context.Background(), room, func(tx *sql.Tx, rm *Room) error {
+		rm.Game = fixedGame()
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.post(base+"/team", url.Values{"team": {"ember"}, "role": {"handler"}})
+	b.post(base+"/team", url.Values{"team": {"tide"}, "role": {"handler"}})
+
+	// Enable 60s timer.
+	if code, _ := a.post(base+"/settings", url.Values{"timer": {"60"}}); code != 200 {
+		t.Fatalf("enable timer = %d", code)
+	}
+
+	// Make room appear stale (> 600s old), then trigger timeout #1 via non-member GET /state.
+	stale := now() - 1000
+	if _, err := store.w.Exec(`UPDATE rooms SET updated_at=? WHERE code=?`, stale, room); err != nil {
+		t.Fatal(err)
+	}
+	nowT = nowT.Add(61 * time.Second)
+	if code, _ := outsider.get(base + "/state?v=0"); code != http.StatusForbidden {
+		t.Fatalf("outsider state = %d, want 403", code)
+	}
+	_, updated, _, _ := store.RoomMeta(context.Background(), room, "")
+	if updated != stale {
+		t.Fatalf("non-member expiry bumped updated_at: got %d, want %d", updated, stale)
+	}
+	snap, _ := store.Snapshot(context.Background(), room)
+	if snap.Room.IdleTimeouts != 1 || snap.Room.Deadline == 0 {
+		t.Fatalf("after timeout 1: idle=%d deadline=%d", snap.Room.IdleTimeouts, snap.Room.Deadline)
+	}
+
+	// Timeout #2: still running.
+	nowT = nowT.Add(61 * time.Second)
+	a.get(base + "/state?v=0")
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.IdleTimeouts != 2 || snap.Room.Deadline == 0 {
+		t.Fatalf("after timeout 2: idle=%d deadline=%d", snap.Room.IdleTimeouts, snap.Room.Deadline)
+	}
+
+	// Timeout #3: pauses timer (deadline=0) and logs once.
+	nowT = nowT.Add(61 * time.Second)
+	_, body := a.get(base + "/state?v=0")
+	if !strings.Contains(body, "Timer paused — nobody&#39;s moving") && !strings.Contains(body, "Timer paused — nobody's moving") {
+		t.Fatalf("expected pause log entry in response")
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Deadline != 0 {
+		t.Fatalf("after timeout 3: deadline = %d, want 0", snap.Room.Deadline)
+	}
+
+	// Further polls after more time must not add duplicate pause logs.
+	nowT = nowT.Add(120 * time.Second)
+	a.get(base + "/state?v=0")
+	snap, _ = store.Snapshot(context.Background(), room)
+	pauseCount := 0
+	for _, e := range snap.Log {
+		if e.Text == "Timer paused — nobody's moving" {
+			pauseCount++
+		}
+	}
+	if pauseCount != 1 {
+		t.Fatalf("pause log count = %d, want 1", pauseCount)
+	}
+
+	// Next clue resumes timer and resets IdleTimeouts.
+	active := a
+	if snap.Room.Game.Turn == Tide {
+		active = b
+	}
+	if code, _ := active.post(base+"/clue", url.Values{"clue": {"zzzzzz"}, "number": {"1"}}); code != 200 {
+		t.Fatalf("clue to resume = %d", code)
+	}
+	snap, _ = store.Snapshot(context.Background(), room)
+	if snap.Room.Deadline != nowT.UnixMilli()+60_000 || snap.Room.IdleTimeouts != 0 {
+		t.Fatalf("after clue resume: deadline=%d idle=%d", snap.Room.Deadline, snap.Room.IdleTimeouts)
+	}
+}
+
+func TestLogCappedAt200PerRoom(t *testing.T) {
+	store, _, _ := newTestApp(t)
+	ctx := context.Background()
+	if err := store.CreateRoom(ctx, "LOGS", newGame(), Player{ID: "p1", Nickname: "Alice", Team: "ember", Role: "handler"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Mutate(ctx, "LOGS", func(tx *sql.Tx, rm *Room) error {
+		for i := range 230 {
+			if err := addLog(ctx, tx, rm, LogEntry{Kind: "settings", Text: fmt.Sprintf("entry-%03d", i)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.r.QueryRow(`SELECT COUNT(*) FROM log WHERE room='LOGS'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != maxLogPerRoom {
+		t.Fatalf("log count = %d, want %d", count, maxLogPerRoom)
+	}
+	snap, err := store.Snapshot(ctx, "LOGS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Log[0].Text != "entry-229" || snap.Log[len(snap.Log)-1].Text != "entry-030" {
+		t.Fatalf("unexpected log bounds: newest=%q oldest=%q", snap.Log[0].Text, snap.Log[len(snap.Log)-1].Text)
+	}
+}
+
+func TestTimerScaleValidation(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "scale.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	bad := []string{"NaN", "Inf", "+Inf", "-Inf", "0", "-1", "-0.5", "100.1", "999", "abc"}
+	for _, raw := range bad {
+		t.Setenv("DEADDROP_TIMER_SCALE", raw)
+		app, err := NewApp(store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.timerScale != 1.0 {
+			t.Errorf("DEADDROP_TIMER_SCALE=%q gave %v, want 1.0", raw, app.timerScale)
+		}
+	}
+	good := []struct {
+		raw  string
+		want float64
+	}{
+		{"0.05", 0.05},
+		{"1", 1},
+		{"100", 100},
+	}
+	for _, tc := range good {
+		t.Setenv("DEADDROP_TIMER_SCALE", tc.raw)
+		app, err := NewApp(store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.timerScale != tc.want {
+			t.Errorf("DEADDROP_TIMER_SCALE=%q gave %v, want %v", tc.raw, app.timerScale, tc.want)
+		}
+	}
+}
+
+func TestWordListsNoDuplicatesOrOverlap(t *testing.T) {
+	classic := make(map[string]bool, len(wordList))
+	for _, w := range wordList {
+		if classic[w] {
+			t.Errorf("duplicate in classic wordList: %q", w)
+		}
+		classic[w] = true
+	}
+	hard := make(map[string]bool, len(hardWordList))
+	for _, w := range hardWordList {
+		if hard[w] {
+			t.Errorf("duplicate in hardWordList: %q", w)
+		}
+		if classic[w] {
+			t.Errorf("overlap between classic and hard word lists: %q", w)
+		}
+		hard[w] = true
+	}
+	mixed := wordsFor(PackMixed, "")
+	seen := make(map[string]bool, len(mixed))
+	for _, w := range mixed {
+		if seen[w] {
+			t.Errorf("duplicate in mixed pack: %q", w)
+		}
+		seen[w] = true
+	}
+	if len(mixed) != len(classic)+len(hard) {
+		t.Errorf("mixed pack len = %d, want %d", len(mixed), len(classic)+len(hard))
+	}
+	for seed := uint64(0); seed < 20; seed++ {
+		g := NewGame(testRNG(seed), mixed)
+		board := make(map[string]bool, BoardSize)
+		for _, c := range g.Cards {
+			if board[c.Word] {
+				t.Fatalf("seed %d: duplicate card %q in mixed game", seed, c.Word)
+			}
+			board[c.Word] = true
+		}
 	}
 }

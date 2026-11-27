@@ -13,6 +13,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"math"
 	mrand "math/rand/v2"
 	"net"
 	"net/http"
@@ -137,7 +138,7 @@ func NewApp(store *Store) (*App, error) {
 	}
 	scale := 1.0
 	if raw := os.Getenv("DEADDROP_TIMER_SCALE"); raw != "" {
-		if v, err := strconv.ParseFloat(raw, 64); err == nil && v > 0 {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0 && v <= 100 {
 			scale = v
 		}
 	}
@@ -634,6 +635,7 @@ func (a *App) doClue(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r *h
 	if err := g.SubmitClue(team, r.PostFormValue("clue"), n); err != nil {
 		return gameError(err)
 	}
+	rm.IdleTimeouts = 0
 	return addLog(ctx, tx, rm, LogEntry{Kind: "clue", Team: team, Nickname: me.Nickname, Text: fmt.Sprintf("%s %d", g.Clue, g.Number)})
 }
 
@@ -653,6 +655,10 @@ func (a *App) doReveal(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, r 
 	res, err := g.Reveal(team, idx, me.Nickname)
 	if err != nil {
 		return gameError(err)
+	}
+	rm.IdleTimeouts = 0
+	if rm.TimerSecs > 0 && rm.Deadline == 0 && !g.Over() {
+		a.restartTimer(rm)
 	}
 	if err := clearCardMarks(ctx, tx, rm.Code, idx); err != nil {
 		return err
@@ -692,6 +698,7 @@ func (a *App) doNewRound(ctx context.Context, tx *sql.Tx, rm *Room, me *Player, 
 	}
 	rm.Game = a.newGameFor(rm)
 	rm.Round++
+	rm.IdleTimeouts = 0
 	if err := clearOldLog(ctx, tx, rm); err != nil {
 		return err
 	}
